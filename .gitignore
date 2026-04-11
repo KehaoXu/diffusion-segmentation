@@ -1,5 +1,8 @@
 atlas
-uncond_gen
+USB/assets
+logs
+wandb
+*.pt
 *.pyc
 .vscode
 .codex

@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=atlas-seg
+#SBATCH --job-name=seg
 #SBATCH --partition=a100
-#SBATCH --qos=qos_gpu
-#SBATCH --account=peirong_gpu
+#SBATCH --qos=normal
+#SBATCH --account=peirong
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
@@ -16,19 +16,10 @@ cd "${SLURM_SUBMIT_DIR:-/home/kxu56/seg}"
 mkdir -p logs outputs
 
 # Load your Python environment here.
-# Pick one setup that matches your cluster.
-#
-# If your cluster uses conda directly:
-# source ~/miniconda3/etc/profile.d/conda.sh
-# conda activate seg
-#
-# If your cluster uses environment modules:
-# module load miniconda3
+
+module load anaconda3
 # source "$(conda info --base)/etc/profile.d/conda.sh"
-# conda activate seg
-#
-# Optional: for online W&B runs, export your API key before `python train.py`.
-# export WANDB_API_KEY=your_api_key
+conda activate monai
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
@@ -62,7 +53,7 @@ python train.py \
   --device cuda:0 \
   --use-wandb \
   --wandb-project atlas-seg \
-  --wandb-run-name "atlas-${SLURM_JOB_ID}" \
+  --wandb-run-name "seg-${SLURM_JOB_ID}" \
   --wandb-mode offline
 
 # To switch to online sync later:
