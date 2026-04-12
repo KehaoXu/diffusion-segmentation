@@ -11,6 +11,7 @@ from torch.optim import Adam, lr_scheduler
 from tqdm import tqdm
 
 from .config import TrainConfig
+from .experiment import ExperimentRecorder, RuntimeContext
 
 try:
     import wandb
@@ -19,10 +20,11 @@ except ImportError:
 
 
 class CheckpointState(object):
-    def __init__(self, best_path=None, last_path=None, best_dice=-1.0, start_epoch=0):
+    def __init__(self, best_path=None, last_path=None, best_dice=-1.0, best_epoch=0, start_epoch=0):
         self.best_path = best_path
         self.last_path = last_path
         self.best_dice = best_dice
+        self.best_epoch = best_epoch
         self.start_epoch = start_epoch
 
 
@@ -62,7 +64,13 @@ def load_training_state(
 
     if best_path is None or last_path is None:
         print("No model found, training from scratch.")
-        return CheckpointState(best_path=best_path, last_path=last_path, best_dice=-1.0, start_epoch=0)
+        return CheckpointState(
+            best_path=best_path,
+            last_path=last_path,
+            best_dice=-1.0,
+            best_epoch=0,
+            start_epoch=0,
+        )
 
     best_epoch = int(best_path.stem.split("_")[-1])
     last_epoch = int(last_path.stem.split("_")[-1])
@@ -90,6 +98,7 @@ def load_training_state(
         best_path=best_path,
         last_path=last_path,
         best_dice=best_dice,
+        best_epoch=best_epoch,
         start_epoch=start_epoch,
     )
 
@@ -228,9 +237,17 @@ def validate_one_epoch(
     return epoch_loss / max(len(loader), 1), avg_dice
 
 
-def train(config: TrainConfig, model: torch.nn.Module, train_loader, val_loader, post_trans) -> None:
+def train(
+    config: TrainConfig,
+    model: torch.nn.Module,
+    train_loader,
+    val_loader,
+    post_trans,
+    runtime: RuntimeContext,
+) -> None:
     configure_warnings()
     config.ensure_output_dir()
+    recorder = ExperimentRecorder(config, runtime)
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
     model.to(device)
     print("device:", device)
@@ -246,6 +263,8 @@ def train(config: TrainConfig, model: torch.nn.Module, train_loader, val_loader,
     wandb_run = init_wandb(config, model)
 
     state = load_training_state(config, model, optimizer, scheduler, device, log_path)
+    final_val_dice = None
+    final_epoch = state.start_epoch
 
     try:
         for epoch_idx in range(state.start_epoch, config.max_epochs):
@@ -279,6 +298,7 @@ def train(config: TrainConfig, model: torch.nn.Module, train_loader, val_loader,
             is_best = val_dice > state.best_dice
             if is_best:
                 state.best_dice = val_dice
+                state.best_epoch = epoch
                 new_best_path = config.out_dir / f"unet3d_best_{epoch}.pt"
                 save_checkpoint(new_best_path, epoch, model, optimizer, scheduler)
                 if state.best_path is not None and state.best_path.exists():
@@ -309,9 +329,36 @@ def train(config: TrainConfig, model: torch.nn.Module, train_loader, val_loader,
                 state.last_path = new_last_path
                 print(f"saved last -> {state.last_path}")
 
+            final_val_dice = val_dice
+            final_epoch = epoch
+
         final_last_path = config.out_dir / f"unet3d_last_{config.max_epochs}.pt"
         save_checkpoint(final_last_path, config.max_epochs, model, optimizer, scheduler)
+        state.last_path = final_last_path
         print("Training done. best dice:", state.best_dice)
+        recorder.finalize(
+            status="completed",
+            best_val_dice=state.best_dice,
+            best_epoch=state.best_epoch,
+            final_val_dice=final_val_dice,
+            final_epoch=final_epoch,
+            best_checkpoint=state.best_path,
+            last_checkpoint=state.last_path,
+            log_path=log_path,
+        )
+    except Exception as exc:
+        recorder.finalize(
+            status="failed",
+            best_val_dice=state.best_dice,
+            best_epoch=state.best_epoch,
+            final_val_dice=final_val_dice,
+            final_epoch=final_epoch,
+            best_checkpoint=state.best_path,
+            last_checkpoint=state.last_path,
+            log_path=log_path,
+            error_message=str(exc),
+        )
+        raise
     finally:
         if wandb_run is not None:
             wandb.finish()

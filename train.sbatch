@@ -7,18 +7,26 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --time=24:00:00
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
+#SBATCH --output=logs/%x-%j.bootstrap.out
+#SBATCH --error=logs/%x-%j.bootstrap.err
 
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-/home/kxu56/seg}"
 mkdir -p logs outputs
 
+GEN_RATIO="${GEN_RATIO:-0.3}"
+GEN_RATIO_SUFFIX="${GEN_RATIO#0.}"
+OUT_DIR="${OUT_DIR:-outputs/atlas1+uncond${GEN_RATIO_SUFFIX}}"
+GEN_RATIO_TAG="${GEN_RATIO//./p}"
+LOG_OUT="logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}-${GEN_RATIO_TAG}.out"
+LOG_ERR="logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}-${GEN_RATIO_TAG}.err"
+
+exec >"${LOG_OUT}" 2>"${LOG_ERR}"
+
 # Load your Python environment here.
 
 module load anaconda3
-# source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate monai
 
 export PYTHONUNBUFFERED=1
@@ -37,10 +45,10 @@ echo "Python: $(which python)"
 # For first-time W&B usage, start with offline mode.
 
 python train.py \
-  --out-dir outputs/atlas1 \
+  --out-dir "${OUT_DIR}" \
   --real-root atlas \
-  --gen-root uncond_gen \
-  --gen-ratio 0 \
+  --gen-root USB/assets/uncond_gen \
+  --gen-ratio "${GEN_RATIO}" \
   --max-epochs 100 \
   --patch-size 128,128,128 \
   --roi-size 128,128,128 \
@@ -53,7 +61,7 @@ python train.py \
   --device cuda:0 \
   --use-wandb \
   --wandb-project atlas-seg \
-  --wandb-run-name "seg-${SLURM_JOB_ID}" \
+  --wandb-run-name "seg-aug-${SLURM_JOB_ID}" \
   --wandb-mode offline
 
 # To switch to online sync later:

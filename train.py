@@ -1,6 +1,12 @@
 import argparse
 
-from seg_training import TrainConfig, build_model, create_dataloaders, train
+from seg_training import (
+    TrainConfig,
+    build_model,
+    collect_runtime_context,
+    create_dataloaders,
+    train,
+)
 from seg_training.config import parse_tuple
 
 
@@ -67,10 +73,18 @@ def main() -> None:
         wandb_run_name=args.wandb_run_name,
         wandb_mode=args.wandb_mode,
     )
+    requested_out_dir = config.out_dir
+    config.ensure_output_dir()
+    if config.out_dir != requested_out_dir:
+        print(f"Requested output dir exists and is not empty: {requested_out_dir}")
+        print(f"Using a new output dir instead: {config.out_dir}")
+    else:
+        print(f"Using output dir: {config.out_dir}")
+    runtime = collect_runtime_context()
 
     train_loader, val_loader, post_trans = create_dataloaders(config)
     model = build_model(config)
-    train(config, model, train_loader, val_loader, post_trans)
+    train(config, model, train_loader, val_loader, post_trans, runtime=runtime)
 
 
 if __name__ == "__main__":

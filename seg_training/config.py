@@ -78,8 +78,34 @@ class TrainConfig(object):
     def common_keys(self):
         return ("image", "label")
 
+    def _has_existing_outputs(self, path: Path) -> bool:
+        if not path.exists():
+            return False
+        return any(path.iterdir())
+
+    def reserve_output_dir(self) -> Path:
+        requested = self.out_dir
+        if not self._has_existing_outputs(requested):
+            requested.mkdir(parents=True, exist_ok=True)
+            return requested
+
+        parent = requested.parent
+        stem = requested.name
+        suffix = 1
+        while True:
+            candidate = parent / f"{stem}{suffix}"
+            if not candidate.exists():
+                candidate.mkdir(parents=True, exist_ok=False)
+                self.out_dir = candidate
+                return candidate
+            if not self._has_existing_outputs(candidate):
+                candidate.mkdir(parents=True, exist_ok=True)
+                self.out_dir = candidate
+                return candidate
+            suffix += 1
+
     def ensure_output_dir(self):
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.reserve_output_dir()
 
     def to_dict(self):
         return {
@@ -118,6 +144,17 @@ class TrainConfig(object):
             "wandb_run_name": self.wandb_run_name,
             "wandb_mode": self.wandb_mode,
         }
+
+    def to_serializable_dict(self):
+        payload = {}
+        for key, value in self.to_dict().items():
+            if isinstance(value, Path):
+                payload[key] = str(value)
+            elif isinstance(value, tuple):
+                payload[key] = list(value)
+            else:
+                payload[key] = value
+        return payload
 
 
 def parse_tuple(raw):
