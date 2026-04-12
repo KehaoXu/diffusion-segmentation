@@ -1,0 +1,15 @@
+{
+  "run_id": "20260412-031246-1276387",
+  "status": "completed",
+  "started_at": "2026-04-12T03:12:46.391421+00:00",
+  "finished_at": "2026-04-12T06:54:56.349952+00:00",
+  "duration_sec": 13329.958531,
+  "best_val_dice": 0.5686726570129395,
+  "best_epoch": 73,
+  "final_val_dice": 0.5674457550048828,
+  "final_epoch": 100,
+  "best_checkpoint": "outputs/atlas1+uncond4/unet3d_best_73.pt",
+  "last_checkpoint": "outputs/atlas1+uncond4/unet3d_last_100.pt",
+  "log_path": "outputs/atlas1+uncond4/training_log.csv",
+  "error_message": ""
+}
