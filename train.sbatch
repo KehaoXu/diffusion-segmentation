@@ -46,7 +46,7 @@ echo "Python: $(which python)"
 
 python train.py \
   --out-dir "${OUT_DIR}" \
-  --real-root atlas \
+  --real-root /scratch/peirong/kxu56/atlas \
   --gen-root USB/assets/uncond_gen \
   --gen-ratio "${GEN_RATIO}" \
   --max-epochs 100 \
