@@ -7,6 +7,7 @@ class TrainConfig(object):
         out_dir="outputs/atlas1",
         real_root="atlas",
         gen_root="uncond_gen",
+        split_file=None,
         seed=42,
         train_ratio=0.8,
         filter_empty=True,
@@ -42,6 +43,7 @@ class TrainConfig(object):
         self.out_dir = Path(out_dir)
         self.real_root = Path(real_root)
         self.gen_root = Path(gen_root)
+        self.split_file = Path(split_file) if split_file is not None else None
         self.seed = seed
         self.train_ratio = train_ratio
         self.filter_empty = filter_empty
@@ -112,6 +114,7 @@ class TrainConfig(object):
             "out_dir": str(self.out_dir),
             "real_root": str(self.real_root),
             "gen_root": str(self.gen_root),
+            "split_file": str(self.split_file) if self.split_file is not None else None,
             "seed": self.seed,
             "train_ratio": self.train_ratio,
             "filter_empty": self.filter_empty,

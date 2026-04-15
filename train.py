@@ -15,6 +15,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--out-dir", default="outputs/atlas1")
     parser.add_argument("--real-root", default="atlas")
     parser.add_argument("--gen-root", default="uncond_gen")
+    parser.add_argument("--split-file", default="output1/atlas_train_val.csv")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--gen-ratio", type=float, default=0.0)
@@ -48,6 +49,7 @@ def main() -> None:
         out_dir=args.out_dir,
         real_root=args.real_root,
         gen_root=args.gen_root,
+        split_file=args.split_file,
         seed=args.seed,
         train_ratio=args.train_ratio,
         filter_empty=not args.no_filter_empty,

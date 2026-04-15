@@ -13,11 +13,11 @@
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-/home/kxu56/seg}"
-mkdir -p logs outputs
+mkdir -p logs outputs1
 
 GEN_RATIO="${GEN_RATIO:-0.3}"
 GEN_RATIO_SUFFIX="${GEN_RATIO#0.}"
-OUT_DIR="${OUT_DIR:-outputs/atlas1+uncond${GEN_RATIO_SUFFIX}}"
+OUT_DIR="${OUT_DIR:-outputs1/atlas1+uncond${GEN_RATIO_SUFFIX}}"
 GEN_RATIO_TAG="${GEN_RATIO//./p}"
 LOG_OUT="logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}-${GEN_RATIO_TAG}.out"
 LOG_ERR="logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}-${GEN_RATIO_TAG}.err"
@@ -48,6 +48,7 @@ python train.py \
   --out-dir "${OUT_DIR}" \
   --real-root /scratch/peirong/kxu56/atlas \
   --gen-root USB/assets/uncond_gen \
+  --split-file "output1/atlas_train_val.csv" \
   --gen-ratio "${GEN_RATIO}" \
   --max-epochs 100 \
   --patch-size 128,128,128 \
@@ -60,7 +61,7 @@ python train.py \
   --loader-workers "${SLURM_CPUS_PER_TASK}" \
   --device cuda:0 \
   --use-wandb \
-  --wandb-project atlas-seg \
+  --wandb-project atlas-seg1 \
   --wandb-run-name "seg-aug-${SLURM_JOB_ID}" \
   --wandb-mode offline
 

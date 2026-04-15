@@ -1,8 +1,9 @@
+import csv
 import glob
 import os
 import random
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import nibabel as nib
 import numpy as np
@@ -32,6 +33,153 @@ from monai.transforms import (
 )
 
 from .config import TrainConfig
+
+
+def _resolve_path(value: Path) -> Path:
+    return value.expanduser().resolve()
+
+
+def _normalize_item(item: Dict[str, str]) -> Dict[str, str]:
+    return {
+        "image": str(_resolve_path(Path(item["image"]))),
+        "label": str(_resolve_path(Path(item["label"]))),
+    }
+
+
+def shuffle_data_list(
+    data_list: List[Dict[str, str]],
+    seed: int,
+) -> List[Dict[str, str]]:
+    shuffled = list(data_list)
+    rng = random.Random(seed)
+    rng.shuffle(shuffled)
+    return shuffled
+
+
+def save_split_file(
+    split_path: Path,
+    *,
+    dataset_name: str,
+    real_root: Path,
+    train_ratio: float,
+    filter_empty: bool,
+    split_seed: int,
+    train_data: List[Dict[str, str]],
+    val_data: List[Dict[str, str]],
+) -> Path:
+    split_path = split_path.expanduser().resolve()
+    split_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_train = [_normalize_item(item) for item in train_data]
+    normalized_val = [_normalize_item(item) for item in val_data]
+    fieldnames = [
+        "split",
+        "image",
+        "label",
+        "dataset_name",
+        "real_root",
+        "train_ratio",
+        "filter_empty",
+        "split_seed",
+    ]
+    resolved_real_root = str(_resolve_path(real_root))
+    with split_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for split_name, items in (("train", normalized_train), ("val", normalized_val)):
+            for item in items:
+                writer.writerow(
+                    {
+                        "split": split_name,
+                        "image": item["image"],
+                        "label": item["label"],
+                        "dataset_name": dataset_name,
+                        "real_root": resolved_real_root,
+                        "train_ratio": train_ratio,
+                        "filter_empty": filter_empty,
+                        "split_seed": split_seed,
+                    }
+                )
+    return split_path
+
+
+def load_split_file(split_path: Path) -> Dict[str, object]:
+    split_path = split_path.expanduser().resolve()
+    train_data: List[Dict[str, str]] = []
+    val_data: List[Dict[str, str]] = []
+    dataset_name = None
+    real_root = None
+    train_ratio = None
+    filter_empty = None
+    split_seed = None
+
+    with split_path.open("r", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            split_name = row["split"].strip()
+            item = _normalize_item({"image": row["image"], "label": row["label"]})
+
+            if dataset_name is None:
+                dataset_name = row.get("dataset_name") or None
+            if real_root is None:
+                raw_root = row.get("real_root") or None
+                real_root = str(_resolve_path(Path(raw_root))) if raw_root else None
+            if train_ratio is None:
+                raw_train_ratio = row.get("train_ratio")
+                train_ratio = float(raw_train_ratio) if raw_train_ratio not in (None, "") else None
+            if filter_empty is None:
+                raw_filter_empty = row.get("filter_empty")
+                if raw_filter_empty not in (None, ""):
+                    filter_empty = raw_filter_empty.strip().lower() == "true"
+            if split_seed is None:
+                raw_split_seed = row.get("split_seed")
+                split_seed = int(raw_split_seed) if raw_split_seed not in (None, "") else None
+
+            if split_name == "train":
+                train_data.append(item)
+            elif split_name == "val":
+                val_data.append(item)
+            else:
+                raise ValueError(f"Unknown split name '{split_name}' in {split_path}")
+
+    payload = {
+        "dataset_name": dataset_name,
+        "real_root": real_root,
+        "train_ratio": train_ratio,
+        "filter_empty": filter_empty,
+        "split_seed": split_seed,
+        "train": train_data,
+        "val": val_data,
+    }
+    return payload
+
+
+def validate_split_file(
+    split_payload: Dict[str, object],
+    *,
+    real_root: Path,
+    filter_empty: bool,
+) -> None:
+    expected_root = str(_resolve_path(real_root))
+    payload_root = str(split_payload.get("real_root"))
+    if payload_root != expected_root:
+        raise ValueError(
+            f"Split file real_root mismatch: expected {expected_root}, found {payload_root}"
+        )
+
+    payload_filter_empty = bool(split_payload.get("filter_empty"))
+    if payload_filter_empty != filter_empty:
+        raise ValueError(
+            "Split file filter_empty mismatch: "
+            f"expected {filter_empty}, found {payload_filter_empty}"
+        )
+
+    train_data = split_payload["train"]
+    val_data = split_payload["val"]
+    train_keys = {(item["image"], item["label"]) for item in train_data}
+    val_keys = {(item["image"], item["label"]) for item in val_data}
+    overlap = train_keys & val_keys
+    if overlap:
+        raise ValueError(f"Split file contains {len(overlap)} overlapping train/val samples")
 
 
 class GaussianThresholdBackgroundd(MapTransform):
@@ -187,13 +335,53 @@ class DatasetBuilder:
     def split_train_val(
         self, data_list: List[Dict[str, str]]
     ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        random.seed(self.seed)
-        random.shuffle(data_list)
+        data_list = shuffle_data_list(data_list, seed=self.seed)
         split_idx = int(self.train_ratio * len(data_list))
         train_data = data_list[:split_idx]
         val_data = data_list[split_idx:]
         print(f"[Split] train={len(train_data)}, val={len(val_data)}")
         return train_data, val_data
+
+    def generate_split(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        real_list = self.build_real_list()
+        real_list = self.filter_foreground(real_list)
+        return self.split_train_val(real_list)
+
+    def load_split(
+        self,
+        split_path: Path,
+        *,
+        shuffle_seed: Optional[int] = None,
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        payload = load_split_file(split_path)
+        validate_split_file(
+            payload,
+            real_root=self.real_root,
+            filter_empty=self.filter_empty,
+        )
+        train_data = list(payload["train"])
+        val_data = list(payload["val"])
+        if shuffle_seed is not None:
+            train_data = shuffle_data_list(train_data, seed=shuffle_seed)
+            val_data = shuffle_data_list(val_data, seed=shuffle_seed + 1)
+        print(f"[Split] loaded train={len(train_data)}, val={len(val_data)} from {split_path}")
+        return train_data, val_data
+
+    def save_split(
+        self,
+        split_path: Path,
+    ) -> Path:
+        train_data, val_data = self.generate_split()
+        return save_split_file(
+            split_path,
+            dataset_name=self.__class__.__name__,
+            real_root=self.real_root,
+            train_ratio=self.train_ratio,
+            filter_empty=self.filter_empty,
+            split_seed=self.seed,
+            train_data=train_data,
+            val_data=val_data,
+        )
 
     def add_gen(self, train_data: List[Dict[str, str]]) -> List[Dict[str, str]]:
         len_train_data = len(train_data)
@@ -213,14 +401,16 @@ class DatasetBuilder:
         return train_data
 
     def build(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        real_list = self.build_real_list()
-        real_list = self.filter_foreground(real_list)
-        train_data, val_data = self.split_train_val(real_list)
+        train_data, val_data = self.generate_split()
         train_data = self.add_gen(train_data)
         return train_data, val_data
 
 
 class AtlasBuilder(DatasetBuilder):
+    def generate_split(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        real_data = self.build_real_list()
+        return self.split_train_val(real_data)
+
     def build_real_list(self) -> List[Dict[str, str]]:
         data_list: List[Dict[str, str]] = []
         img_paths = glob.glob(os.path.join(self.real_root.as_posix(), "T1/sub-*.nii.gz"))
@@ -255,8 +445,7 @@ class AtlasBuilder(DatasetBuilder):
         return data_list
 
     def build(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Dict[str, str]]]:
-        real_data = self.build_real_list()
-        train_data, val_data = self.split_train_val(real_data)
+        train_data, val_data = self.generate_split()
         gen_data = self.build_gen_list(train_data)
         return train_data, val_data, gen_data
 
@@ -330,7 +519,10 @@ def create_dataloaders(config: TrainConfig):
         filter_empty=config.filter_empty,
         gen_ratio=config.gen_ratio,
     )
-    train_data, val_data, gen_data = builder.build()
+    if config.split_file is None:
+        raise ValueError("config.split_file must be set. Generate a split file before training.")
+    train_data, val_data = builder.load_split(config.split_file, shuffle_seed=config.seed)
+    gen_data = builder.build_gen_list(train_data)
 
     gen_tf, train_tf, val_tf, post_tf = build_transforms(config)
 
