@@ -15,8 +15,13 @@ from monai.metrics import DiceMetric
 from tqdm import tqdm
 
 from seg_training import TrainConfig, build_model
-from seg_training.data import AtlasBuilder, build_transforms
-from seg_training.engine import validate_one_epoch
+from seg_training.data import (
+    CACHE_RATE,
+    VAL_BATCH_SIZE,
+    build_transforms,
+    load_split,
+)
+from seg_training.engine import ROI_SIZE, SW_BATCH_SIZE, validate_one_epoch
 
 
 DEFAULT_VIS_DIR = Path("vis_results")
@@ -46,14 +51,11 @@ def build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to run_config.json. If omitted, the script will try to infer it.",
     )
-    parser.add_argument("--real-root", default=None, help="Override real dataset root from config.")
     parser.add_argument("--gen-root", default=None, help="Override synthetic dataset root from config.")
     parser.add_argument("--split-file", default=None, help="Path to a previously saved train/val split.")
     parser.add_argument("--device", default=None, help="Device override, e.g. cuda:0 or cpu.")
-    parser.add_argument("--val-batch-size", type=int, default=None, help="Validation batch size.")
     parser.add_argument("--loader-workers", type=int, default=None, help="Validation dataloader workers.")
     parser.add_argument("--cache-workers", type=int, default=None, help="CacheDataset workers.")
-    parser.add_argument("--cache-rate", type=float, default=None, help="CacheDataset cache rate.")
     parser.add_argument(
         "--vis-count",
         type=int,
@@ -171,12 +173,6 @@ def create_run_output_dir(base_dir: str) -> Path:
     return run_dir
 
 
-def _to_tuple(value):
-    if isinstance(value, list):
-        return tuple(value)
-    return value
-
-
 def build_config_from_args(
     args: argparse.Namespace,
     checkpoint_path: Optional[Path] = None,
@@ -193,28 +189,19 @@ def build_config_from_args(
         with config_path.open("r") as f:
             payload = json.load(f)
         config_kwargs.update(payload.get("config", {}))
-
-    tuple_keys = {"patch_size", "roi_size", "channels", "strides", "spacing"}
-    for key in tuple_keys:
-        if key in config_kwargs:
-            config_kwargs[key] = _to_tuple(config_kwargs[key])
-
-    if args.real_root is not None:
-        config_kwargs["real_root"] = args.real_root
     if args.gen_root is not None:
         config_kwargs["gen_root"] = args.gen_root
     if args.split_file is not None:
         config_kwargs["split_file"] = args.split_file
     if args.device is not None:
         config_kwargs["device"] = args.device
-    if args.val_batch_size is not None:
-        config_kwargs["val_batch_size"] = args.val_batch_size
     if args.loader_workers is not None:
         config_kwargs["loader_workers"] = args.loader_workers
     if args.cache_workers is not None:
         config_kwargs["cache_workers"] = args.cache_workers
-    if args.cache_rate is not None:
-        config_kwargs["cache_rate"] = args.cache_rate
+
+    valid_keys = set(TrainConfig.__init__.__code__.co_varnames[1:TrainConfig.__init__.__code__.co_argcount])
+    config_kwargs = {key: value for key, value in config_kwargs.items() if key in valid_keys}
 
     config = TrainConfig(**config_kwargs)
     if args.device is None:
@@ -223,27 +210,19 @@ def build_config_from_args(
 
 
 def create_val_loader(config: TrainConfig):
-    builder = AtlasBuilder(
-        real_root=config.real_root,
-        gen_root=config.gen_root,
-        seed=config.seed,
-        train_ratio=config.train_ratio,
-        filter_empty=config.filter_empty,
-        gen_ratio=config.gen_ratio,
-    )
     if config.split_file is None:
         raise ValueError("config.split_file must be set. Provide the saved split file for evaluation.")
-    _, val_data = builder.load_split(config.split_file, shuffle_seed=config.seed)
-    _, _, val_tf, post_tf = build_transforms(config)
+    _, val_data = load_split(config.split_file)
+    _, _, val_tf, post_tf = build_transforms()
     val_ds = CacheDataset(
         data=val_data,
         transform=val_tf,
-        cache_rate=config.cache_rate,
+        cache_rate=CACHE_RATE,
         num_workers=config.cache_workers,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=config.val_batch_size,
+        batch_size=VAL_BATCH_SIZE,
         shuffle=False,
         num_workers=config.loader_workers,
     )
@@ -252,18 +231,8 @@ def create_val_loader(config: TrainConfig):
 
 def ensure_shared_eval_config(base_config: TrainConfig, config: TrainConfig, checkpoint_path: Path) -> None:
     comparable_fields = (
-        "real_root",
-        "seed",
-        "train_ratio",
-        "filter_empty",
-        "spacing",
-        "crop_margin",
-        "val_batch_size",
-        "cache_rate",
         "cache_workers",
         "loader_workers",
-        "roi_size",
-        "sw_batch_size",
     )
     mismatches = [
         field
@@ -312,7 +281,7 @@ def _adapt_state_dict_keys(
 
 
 def load_model(config: TrainConfig, checkpoint_path: Path, device: torch.device) -> torch.nn.Module:
-    model = build_model(config)
+    model = build_model()
     checkpoint = torch.load(checkpoint_path, map_location=device)
     state_dict = _extract_state_dict(checkpoint)
     state_dict = _adapt_state_dict_keys(state_dict, model.state_dict().keys())
@@ -613,8 +582,8 @@ def evaluate_checkpoint(
         model=model,
         val_loader=val_loader,
         device=device,
-        roi_size=model_config.roi_size,
-        sw_batch_size=model_config.sw_batch_size,
+        roi_size=ROI_SIZE,
+        sw_batch_size=SW_BATCH_SIZE,
         post_trans=post_trans,
     )
 
@@ -623,8 +592,8 @@ def evaluate_checkpoint(
         model=model,
         val_loader=val_loader,
         device=device,
-        roi_size=model_config.roi_size,
-        sw_batch_size=model_config.sw_batch_size,
+        roi_size=ROI_SIZE,
+        sw_batch_size=SW_BATCH_SIZE,
         post_trans=post_trans,
         sampled_indices=sampled_indices,
         sample_names=sample_names,

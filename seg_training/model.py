@@ -1,14 +1,12 @@
 from monai.networks.nets import UNet
 
-from .config import TrainConfig
 
-
-def build_model(config: TrainConfig) -> UNet:
+def build_model() -> UNet:
     return UNet(
         spatial_dims=3,
-        in_channels=config.in_channels,
-        out_channels=config.out_channels,
-        channels=config.channels,
-        strides=config.strides,
-        num_res_units=config.num_res_units,
+        in_channels=1,
+        out_channels=1,
+        channels=(16, 32, 64, 128, 256),
+        strides=(2, 2, 2, 2),
+        num_res_units=2,
     )

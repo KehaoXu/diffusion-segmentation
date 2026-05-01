@@ -5,7 +5,6 @@ import random
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-import nibabel as nib
 import numpy as np
 import torch
 from scipy.ndimage import binary_dilation, gaussian_filter
@@ -35,151 +34,9 @@ from monai.transforms import (
 from .config import TrainConfig
 
 
-def _resolve_path(value: Path) -> Path:
-    return value.expanduser().resolve()
-
-
-def _normalize_item(item: Dict[str, str]) -> Dict[str, str]:
-    return {
-        "image": str(_resolve_path(Path(item["image"]))),
-        "label": str(_resolve_path(Path(item["label"]))),
-    }
-
-
-def shuffle_data_list(
-    data_list: List[Dict[str, str]],
-    seed: int,
-) -> List[Dict[str, str]]:
-    shuffled = list(data_list)
-    rng = random.Random(seed)
-    rng.shuffle(shuffled)
-    return shuffled
-
-
-def save_split_file(
-    split_path: Path,
-    *,
-    dataset_name: str,
-    real_root: Path,
-    train_ratio: float,
-    filter_empty: bool,
-    split_seed: int,
-    train_data: List[Dict[str, str]],
-    val_data: List[Dict[str, str]],
-) -> Path:
-    split_path = split_path.expanduser().resolve()
-    split_path.parent.mkdir(parents=True, exist_ok=True)
-    normalized_train = [_normalize_item(item) for item in train_data]
-    normalized_val = [_normalize_item(item) for item in val_data]
-    fieldnames = [
-        "split",
-        "image",
-        "label",
-        "dataset_name",
-        "real_root",
-        "train_ratio",
-        "filter_empty",
-        "split_seed",
-    ]
-    resolved_real_root = str(_resolve_path(real_root))
-    with split_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for split_name, items in (("train", normalized_train), ("val", normalized_val)):
-            for item in items:
-                writer.writerow(
-                    {
-                        "split": split_name,
-                        "image": item["image"],
-                        "label": item["label"],
-                        "dataset_name": dataset_name,
-                        "real_root": resolved_real_root,
-                        "train_ratio": train_ratio,
-                        "filter_empty": filter_empty,
-                        "split_seed": split_seed,
-                    }
-                )
-    return split_path
-
-
-def load_split_file(split_path: Path) -> Dict[str, object]:
-    split_path = split_path.expanduser().resolve()
-    train_data: List[Dict[str, str]] = []
-    val_data: List[Dict[str, str]] = []
-    dataset_name = None
-    real_root = None
-    train_ratio = None
-    filter_empty = None
-    split_seed = None
-
-    with split_path.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            split_name = row["split"].strip()
-            item = _normalize_item({"image": row["image"], "label": row["label"]})
-
-            if dataset_name is None:
-                dataset_name = row.get("dataset_name") or None
-            if real_root is None:
-                raw_root = row.get("real_root") or None
-                real_root = str(_resolve_path(Path(raw_root))) if raw_root else None
-            if train_ratio is None:
-                raw_train_ratio = row.get("train_ratio")
-                train_ratio = float(raw_train_ratio) if raw_train_ratio not in (None, "") else None
-            if filter_empty is None:
-                raw_filter_empty = row.get("filter_empty")
-                if raw_filter_empty not in (None, ""):
-                    filter_empty = raw_filter_empty.strip().lower() == "true"
-            if split_seed is None:
-                raw_split_seed = row.get("split_seed")
-                split_seed = int(raw_split_seed) if raw_split_seed not in (None, "") else None
-
-            if split_name == "train":
-                train_data.append(item)
-            elif split_name == "val":
-                val_data.append(item)
-            else:
-                raise ValueError(f"Unknown split name '{split_name}' in {split_path}")
-
-    payload = {
-        "dataset_name": dataset_name,
-        "real_root": real_root,
-        "train_ratio": train_ratio,
-        "filter_empty": filter_empty,
-        "split_seed": split_seed,
-        "train": train_data,
-        "val": val_data,
-    }
-    return payload
-
-
-def validate_split_file(
-    split_payload: Dict[str, object],
-    *,
-    real_root: Path,
-    filter_empty: bool,
-) -> None:
-    expected_root = str(_resolve_path(real_root))
-    payload_root = str(split_payload.get("real_root"))
-    if payload_root != expected_root:
-        raise ValueError(
-            f"Split file real_root mismatch: expected {expected_root}, found {payload_root}"
-        )
-
-    payload_filter_empty = bool(split_payload.get("filter_empty"))
-    if payload_filter_empty != filter_empty:
-        raise ValueError(
-            "Split file filter_empty mismatch: "
-            f"expected {filter_empty}, found {payload_filter_empty}"
-        )
-
-    train_data = split_payload["train"]
-    val_data = split_payload["val"]
-    train_keys = {(item["image"], item["label"]) for item in train_data}
-    val_keys = {(item["image"], item["label"]) for item in val_data}
-    overlap = train_keys & val_keys
-    if overlap:
-        raise ValueError(f"Split file contains {len(overlap)} overlapping train/val samples")
+CACHE_RATE = 1.0
+TRAIN_BATCH_SIZE = 2
+VAL_BATCH_SIZE = 1
 
 
 class GaussianThresholdBackgroundd(MapTransform):
@@ -281,141 +138,27 @@ class AlignAxesd(MapTransform):
 class DatasetBuilder:
     def __init__(
         self,
-        real_root: Path,
-        gen_root: Path,
-        seed: int = 42,
+        real_root: Path = Path("/scratch/peirong/kxu56/atlas"),
+        gen_root: Path = Path("/scratch/peirong/kxu56/USB/assets/uncond_gen"),
+        split_seed: int = 42,
+        gen_seed: int = 42,
         train_ratio: float = 0.8,
-        filter_empty: bool = True,
         gen_ratio: float = 0.0,
+        show_progress: bool = False,
     ) -> None:
         self.real_root = Path(real_root)
         self.gen_root = Path(gen_root)
-        self.seed = seed
+        self.split_seed = split_seed
+        self.gen_seed = gen_seed
         self.train_ratio = train_ratio
-        self.filter_empty = filter_empty
         self.gen_ratio = gen_ratio
+        self.show_progress = show_progress
 
     def build_real_list(self) -> List[Dict[str, str]]:
         data_list: List[Dict[str, str]] = []
-        img_paths = glob.glob(
-            os.path.join(self.real_root.as_posix(), "sub-strokecase*/ses-0001/dwi/*_dwi.nii.gz")
-        )
+        img_paths = sorted(glob.glob(os.path.join(self.real_root.as_posix(), "T1/sub-*.nii.gz")))
 
-        for image_path in img_paths:
-            case_id = os.path.basename(image_path).split("_")[0]
-            label_path = os.path.join(
-                self.real_root.as_posix(),
-                "derivatives",
-                case_id,
-                "ses-0001",
-                f"{case_id}_ses-0001_msk.nii.gz",
-            )
-            if os.path.exists(label_path):
-                data_list.append({"image": image_path, "label": label_path})
-
-        print(f"[ISLES] Found {len(data_list)} cases")
-        return data_list
-
-    def filter_foreground(self, data_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        if not self.filter_empty:
-            return data_list
-
-        filtered: List[Dict[str, str]] = []
-        skipped = 0
-        for item in tqdm(data_list, desc="Filtering foreground"):
-            label = nib.load(item["label"]).get_fdata()
-            if np.any(label > 0):
-                filtered.append(item)
-            else:
-                skipped += 1
-
-        print(f"[Filter] keep {len(filtered)} cases, skip {skipped}")
-        return filtered
-
-    def split_train_val(
-        self, data_list: List[Dict[str, str]]
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        data_list = shuffle_data_list(data_list, seed=self.seed)
-        split_idx = int(self.train_ratio * len(data_list))
-        train_data = data_list[:split_idx]
-        val_data = data_list[split_idx:]
-        print(f"[Split] train={len(train_data)}, val={len(val_data)}")
-        return train_data, val_data
-
-    def generate_split(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        real_list = self.build_real_list()
-        real_list = self.filter_foreground(real_list)
-        return self.split_train_val(real_list)
-
-    def load_split(
-        self,
-        split_path: Path,
-        *,
-        shuffle_seed: Optional[int] = None,
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        payload = load_split_file(split_path)
-        validate_split_file(
-            payload,
-            real_root=self.real_root,
-            filter_empty=self.filter_empty,
-        )
-        train_data = list(payload["train"])
-        val_data = list(payload["val"])
-        if shuffle_seed is not None:
-            train_data = shuffle_data_list(train_data, seed=shuffle_seed)
-            val_data = shuffle_data_list(val_data, seed=shuffle_seed + 1)
-        print(f"[Split] loaded train={len(train_data)}, val={len(val_data)} from {split_path}")
-        return train_data, val_data
-
-    def save_split(
-        self,
-        split_path: Path,
-    ) -> Path:
-        train_data, val_data = self.generate_split()
-        return save_split_file(
-            split_path,
-            dataset_name=self.__class__.__name__,
-            real_root=self.real_root,
-            train_ratio=self.train_ratio,
-            filter_empty=self.filter_empty,
-            split_seed=self.seed,
-            train_data=train_data,
-            val_data=val_data,
-        )
-
-    def add_gen(self, train_data: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        len_train_data = len(train_data)
-        img_paths = glob.glob(os.path.join(self.gen_root.as_posix(), "y0_*.nii.gz"))
-
-        count = 0
-        for image_path in img_paths:
-            if count >= int(self.gen_ratio * len_train_data):
-                break
-            case_id = os.path.basename(image_path).split("_")[1]
-            label_path = os.path.join(self.gen_root.as_posix(), f"x0_{case_id}")
-            if os.path.exists(label_path):
-                train_data.append({"image": image_path, "label": label_path})
-                count += 1
-
-        print(f"[Uncond] Added {count} synthetic samples")
-        return train_data
-
-    def build(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        train_data, val_data = self.generate_split()
-        train_data = self.add_gen(train_data)
-        return train_data, val_data
-
-
-class AtlasBuilder(DatasetBuilder):
-    def generate_split(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        real_data = self.build_real_list()
-        return self.split_train_val(real_data)
-
-    def build_real_list(self) -> List[Dict[str, str]]:
-        data_list: List[Dict[str, str]] = []
-        img_paths = glob.glob(os.path.join(self.real_root.as_posix(), "T1/sub-*.nii.gz"))
-
-        for image_path in tqdm(img_paths, desc="Building real list"):
+        for image_path in tqdm(img_paths, desc="Building real list", disable=not self.show_progress):
             case_id = os.path.basename(image_path)
             label_path = os.path.join(
                 self.real_root.as_posix(),
@@ -428,13 +171,15 @@ class AtlasBuilder(DatasetBuilder):
         print(f"Found {len(data_list)} real cases")
         return data_list
 
-    def build_gen_list(self, train_data: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def build_gen_list(self, len_train_data: int) -> List[Dict[str, str]]:
         data_list: List[Dict[str, str]] = []
-        count = int(self.gen_ratio * len(train_data))
-        img_paths = glob.glob(os.path.join(self.gen_root.as_posix(), "y0_*.nii.gz"))
+        count = int(self.gen_ratio * len_train_data)
+        img_paths = sorted(glob.glob(os.path.join(self.gen_root.as_posix(), "y0_*.nii.gz")))
+        rng = random.Random(self.gen_seed)
+        rng.shuffle(img_paths)
 
-        for index, image_path in enumerate(tqdm(img_paths, desc="Building synthetic list")):
-            if index >= count:
+        for image_path in tqdm(img_paths, desc="Building synthetic list", disable=not self.show_progress):
+            if len(data_list) >= count:
                 break
             case_id = os.path.basename(image_path).split(".")[0].split("_")[1]
             label_path = os.path.join(self.gen_root.as_posix(), f"x0_{case_id}.nii.gz")
@@ -444,44 +189,122 @@ class AtlasBuilder(DatasetBuilder):
         print(f"Found {len(data_list)} synthetic cases")
         return data_list
 
-    def build(self) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Dict[str, str]]]:
-        train_data, val_data = self.generate_split()
-        gen_data = self.build_gen_list(train_data)
-        return train_data, val_data, gen_data
+    def split_train_val(
+        self, data_list: List[Dict[str, str]]
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        
+        shuffled = list(data_list)
+        rng = random.Random(self.split_seed)
+        rng.shuffle(shuffled)
+
+        split_idx = int(self.train_ratio * len(shuffled))
+        train_data = shuffled[:split_idx]
+        val_data = shuffled[split_idx:]
+        print(f"[Split] train={len(train_data)}, val={len(val_data)}")
+        return train_data, val_data
+
+    def save_split(
+        self,
+        split_path: Path,
+    ) -> Path:
+        data_list = self.build_real_list()
+        train_data, val_data = self.split_train_val(data_list)
+        
+        train_ratio=self.train_ratio
+        split_seed=self.split_seed
+
+        split_path = split_path.expanduser().resolve()
+        split_path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = [
+            "split",
+            "image",
+            "label",
+            "train_ratio",
+            "split_seed",
+        ]
+        with split_path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for split_name, items in (("train", train_data), ("val", val_data)):
+                for item in items:
+                    writer.writerow(
+                        {
+                            "split": split_name,
+                            "image": item["image"],
+                            "label": item["label"],
+                            "train_ratio": train_ratio,
+                            "split_seed": split_seed,
+                        }
+                    )
+        print(
+            f"\nSaved split file: {split_path}"
+            f"\ntrain={len(train_data)}, val={len(val_data)}"
+            f"\nsplit_seed={split_seed}"
+        )
 
 
-def build_transforms(config: TrainConfig) -> Tuple[Compose, Compose, Compose, Compose]:
+def load_split(
+    split_path: Path,
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    split_path = split_path.expanduser().resolve()
+
+    train_data: List[Dict[str, str]] = []
+    val_data: List[Dict[str, str]] = []
+
+    with split_path.open("r", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            split_name = row["split"].strip()
+            item = {"image": row["image"], "label": row["label"]}
+
+            if split_name == "train":
+                train_data.append(item)
+            elif split_name == "val":
+                val_data.append(item)
+            else:
+                raise ValueError(f"Unknown split name '{split_name}' in {split_path}")
+
+    train_data = list(train_data)
+    val_data = list(val_data)
+
+    print(f"[Split] loaded train={len(train_data)}, val={len(val_data)} from {split_path}")
+
+    return train_data, val_data
+
+
+def build_transforms() -> Tuple[Compose, Compose, Compose, Compose]:
+    keys = ["image", "label"]
     common = [
-        LoadImaged(keys=config.common_keys, image_only=False),
-        EnsureChannelFirstd(keys=config.common_keys),
-        Orientationd(keys=config.common_keys, axcodes="RAS"),
-        Spacingd(keys=config.common_keys, pixdim=config.spacing, mode=("bilinear", "nearest")),
+        LoadImaged(keys=keys, image_only=False),
+        EnsureChannelFirstd(keys=keys),
+        Orientationd(keys=keys, axcodes="RAS"),
+        Spacingd(keys=keys, pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest")),
     ]
 
-    crop_resize_norm = [
-        CropForegroundd(keys=config.common_keys, source_key="image", margin=config.crop_margin),
+    crop_norm = [
+        CropForegroundd(keys=keys, source_key="image", margin=10),
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
     ]
 
     rand_crop = [
         RandCropByPosNegLabeld(
-            keys=config.common_keys,
+            keys=keys,
             label_key="label",
-            spatial_size=config.patch_size,
+            spatial_size=(128, 128, 128),
             pos=1,
             neg=1,
-            num_samples=config.num_samples_per_vol,
+            num_samples=8,
             image_key="image",
             allow_smaller=True,
         )
     ]
 
     augmentation = [
-        RandFlipd(keys=config.common_keys, prob=0.5, spatial_axis=0),
-        RandFlipd(keys=config.common_keys, prob=0.5, spatial_axis=1),
-        RandFlipd(keys=config.common_keys, prob=0.5, spatial_axis=2),
+        RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
+        RandFlipd(keys=keys, prob=0.5, spatial_axis=1),
+        RandFlipd(keys=keys, prob=0.5, spatial_axis=2),
         RandAffined(
-            keys=config.common_keys,
+            keys=keys,
             prob=0.3,
             rotate_range=(0.3, 0.3, 0.3),
             scale_range=(0.1, 0.1, 0.1),
@@ -491,70 +314,67 @@ def build_transforms(config: TrainConfig) -> Tuple[Compose, Compose, Compose, Co
         RandScaleIntensityd(keys=["image"], factors=0.1, prob=0.3),
     ]
 
-    gen_specific = []
-    if config.use_gen_axes_align:
-        gen_specific.append(
-            AlignAxesd(keys=config.common_keys, transpose_order=(0, 2, 1), flip_axes=(2,))
-        )
-    gen_specific.extend(
-        [
-            AsDiscreted(keys=["label"], threshold=0.5, to_onehot=None, dtype=np.float32),
-            GaussianThresholdBackgroundd(keys=["image"], sigma=0.5, thr_ratio=0.02, margin=1),
-        ]
-    )
+    gen_specific = [
+        AlignAxesd(keys=keys, transpose_order=(0, 2, 1), flip_axes=(2,)),
+        AsDiscreted(keys=["label"], threshold=0.5, to_onehot=None, dtype=np.float32),
+        GaussianThresholdBackgroundd(keys=["image"], sigma=0.5, thr_ratio=0.02, margin=1),
+    ]
 
-    gen_tf = Compose(common + gen_specific + crop_resize_norm + rand_crop + augmentation + [EnsureTyped(keys=config.common_keys)])
-    train_tf = Compose(common + crop_resize_norm + rand_crop + augmentation + [EnsureTyped(keys=config.common_keys)])
-    val_tf = Compose(common + crop_resize_norm + [EnsureTyped(keys=config.common_keys)])
+    gen_tf = Compose(common + gen_specific + crop_norm + rand_crop + augmentation + [EnsureTyped(keys=keys)])
+    train_tf = Compose(common + crop_norm + rand_crop + augmentation + [EnsureTyped(keys=keys)])
+    val_tf = Compose(common + crop_norm + [EnsureTyped(keys=keys)])
     post_tf = Compose([Activations(sigmoid=True), AsDiscrete(threshold=0.5)])
+
     return gen_tf, train_tf, val_tf, post_tf
 
 
 def create_dataloaders(config: TrainConfig):
-    builder = AtlasBuilder(
-        real_root=config.real_root,
+    builder = DatasetBuilder(
         gen_root=config.gen_root,
-        seed=config.seed,
-        train_ratio=config.train_ratio,
-        filter_empty=config.filter_empty,
+        gen_seed=config.gen_seed,
         gen_ratio=config.gen_ratio,
+        show_progress=config.show_progress,
     )
     if config.split_file is None:
         raise ValueError("config.split_file must be set. Generate a split file before training.")
-    train_data, val_data = builder.load_split(config.split_file, shuffle_seed=config.seed)
-    gen_data = builder.build_gen_list(train_data)
+    
+    train_data, val_data = load_split(config.split_file)
+    gen_data = builder.build_gen_list(len(train_data))
 
-    gen_tf, train_tf, val_tf, post_tf = build_transforms(config)
+    gen_tf, train_tf, val_tf, post_tf = build_transforms()
 
     gen_ds = CacheDataset(
         data=gen_data,
         transform=gen_tf,
-        cache_rate=config.cache_rate,
+        cache_rate=CACHE_RATE,
         num_workers=config.cache_workers,
+        progress=config.show_progress,
     )
     real_ds = CacheDataset(
         data=train_data,
         transform=train_tf,
-        cache_rate=config.cache_rate,
+        cache_rate=CACHE_RATE,
         num_workers=config.cache_workers,
+        progress=config.show_progress,
     )
     val_ds = CacheDataset(
         data=val_data,
         transform=val_tf,
-        cache_rate=config.cache_rate,
+        cache_rate=CACHE_RATE,
         num_workers=config.cache_workers,
+        progress=config.show_progress,
     )
 
     train_ds = ConcatDataset([real_ds, gen_ds])
     train_loader = DataLoader(
         train_ds,
-        batch_size=config.train_batch_size,
+        batch_size=TRAIN_BATCH_SIZE,
         shuffle=True,
         num_workers=config.loader_workers,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=config.val_batch_size,
+        batch_size=VAL_BATCH_SIZE,
         shuffle=False,
         num_workers=config.loader_workers,
     )

@@ -13,6 +13,12 @@ from tqdm import tqdm
 from .config import TrainConfig
 from .experiment import ExperimentRecorder, RuntimeContext
 
+
+MAX_EPOCHS = 100
+LEARNING_RATE = 1e-4
+ROI_SIZE = (128, 128, 128)
+SW_BATCH_SIZE = 8
+
 try:
     import wandb
 except ImportError:
@@ -155,7 +161,6 @@ def init_wandb(config, model):
     project = config.wandb_project or "seg-training"
     run = wandb.init(
         project=project,
-        entity=config.wandb_entity,
         name=config.wandb_run_name,
         mode=config.wandb_mode,
         config=config.to_dict(),
@@ -174,10 +179,11 @@ def train_one_epoch(
     device: torch.device,
     epoch: int,
     max_epochs: int,
+    show_progress: bool,
 ) -> Tuple[float, float]:
     model.train()
     epoch_loss = 0.0
-    pbar = tqdm(loader, desc=f"Epoch {epoch}/{max_epochs} [Train]")
+    pbar = tqdm(loader, desc=f"Epoch {epoch}/{max_epochs} [Train]", disable=not show_progress)
     current_lr = optimizer.param_groups[0]["lr"]
 
     for batch_idx, batch in enumerate(pbar, start=1):
@@ -213,10 +219,11 @@ def validate_one_epoch(
     device: torch.device,
     roi_size,
     sw_batch_size: int,
+    show_progress: bool,
 ) -> Tuple[float, float]:
     model.eval()
     epoch_loss = 0.0
-    pbar = tqdm(loader, desc="[Val]")
+    pbar = tqdm(loader, desc="[Val]", disable=not show_progress)
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(pbar, start=1):
@@ -257,8 +264,8 @@ def train(
     ensure_log_file(log_path)
 
     loss_fn = DiceCELoss(to_onehot_y=False, sigmoid=True)
-    optimizer = Adam(model.parameters(), lr=config.lr)
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.max_epochs, eta_min=1e-6)
+    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
+    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=1e-6)
     metric = DiceMetric(include_background=False, reduction="mean")
     wandb_run = init_wandb(config, model)
 
@@ -267,7 +274,7 @@ def train(
     final_epoch = state.start_epoch
 
     try:
-        for epoch_idx in range(state.start_epoch, config.max_epochs):
+        for epoch_idx in range(state.start_epoch, MAX_EPOCHS):
             epoch = epoch_idx + 1
             train_loss, train_dice = train_one_epoch(
                 model=model,
@@ -278,7 +285,8 @@ def train(
                 post_trans=post_trans,
                 device=device,
                 epoch=epoch,
-                max_epochs=config.max_epochs,
+                max_epochs=MAX_EPOCHS,
+                show_progress=config.show_progress,
             )
             val_loss, val_dice = validate_one_epoch(
                 model=model,
@@ -287,8 +295,9 @@ def train(
                 metric=metric,
                 post_trans=post_trans,
                 device=device,
-                roi_size=config.roi_size,
-                sw_batch_size=config.sw_batch_size,
+                roi_size=ROI_SIZE,
+                sw_batch_size=SW_BATCH_SIZE,
+                show_progress=config.show_progress,
             )
             current_lr = optimizer.param_groups[0]["lr"]
             print(f"Epoch {epoch} train dice: {train_dice:.4f}, val dice: {val_dice:.4f}")
@@ -332,8 +341,8 @@ def train(
             final_val_dice = val_dice
             final_epoch = epoch
 
-        final_last_path = config.out_dir / f"unet3d_last_{config.max_epochs}.pt"
-        save_checkpoint(final_last_path, config.max_epochs, model, optimizer, scheduler)
+        final_last_path = config.out_dir / f"unet3d_last_{MAX_EPOCHS}.pt"
+        save_checkpoint(final_last_path, MAX_EPOCHS, model, optimizer, scheduler)
         state.last_path = final_last_path
         print("Training done. best dice:", state.best_dice)
         recorder.finalize(

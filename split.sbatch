@@ -1,23 +1,20 @@
 #!/bin/bash
 #SBATCH --job-name=seg-split
-#SBATCH --partition=a100
+#SBATCH --partition=cpu
 #SBATCH --qos=normal
 #SBATCH --account=peirong
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --time=02:00:00
-#SBATCH --output=logs/%x-%j.bootstrap.out
-#SBATCH --error=logs/%x-%j.bootstrap.err
+#SBATCH --cpus-per-task=2
+#SBATCH --time=01:00:00
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
 
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-/home/kxu56/seg}"
-mkdir -p logs output1
+mkdir -p logs outputs1
 
-LOG_OUT="logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out"
-LOG_ERR="logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.err"
-
-exec >"${LOG_OUT}" 2>"${LOG_ERR}"
+SPLIT_FILE="${SPLIT_FILE:-atlas_train_val2.csv}"
 
 module load anaconda3
 conda activate monai
@@ -32,16 +29,12 @@ echo "Working dir: $(pwd)"
 echo "Python: $(which python)"
 echo "Dataset: atlas"
 echo "Real root: /scratch/peirong/kxu56/atlas"
-echo "Gen root: USB/assets/uncond_gen"
-echo "Split file: splits/atlas_train_val.csv"
+echo "Split file: ${SPLIT_FILE}"
 echo "Split seed: 42"
 echo "Train ratio: 0.8"
 
-python generate_split.py \
-  --dataset atlas \
+python split_train_val.py \
   --real-root /scratch/peirong/kxu56/atlas \
-  --gen-root USB/assets/uncond_gen \
-  --split-file outputs1/atlas_train_val.csv \
-  --seed 42 \
-  --train-ratio 0.8 \
-  --overwrite
+  --split-file "${SPLIT_FILE}" \
+  --split-seed 42 \
+  --train-ratio 0.8
