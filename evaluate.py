@@ -8,43 +8,83 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import torch
 from monai.data import CacheDataset, DataLoader
 from monai.inferers import sliding_window_inference
+from monai.transforms import (
+    Activations,
+    AsDiscrete,
+    Compose,
+    CropForegroundd,
+    EnsureChannelFirstd,
+    EnsureTyped,
+    LoadImaged,
+    NormalizeIntensityd,
+    Orientationd,
+    Spacingd,
+)
 from tqdm import tqdm
 
-from seg_training.data import CACHE_RATE, VAL_BATCH_SIZE, build_transforms, load_split
+from seg_training.data import CACHE_RATE, VAL_BATCH_SIZE, load_split
 from seg_training.engine import ROI_SIZE, SW_BATCH_SIZE
 from seg_training.model import build_model
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate one trained 3D UNet checkpoint on the validation split.")
-    parser.add_argument("--checkpoint", required=True, help="Path to one checkpoint file.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate one or more trained 3D UNet checkpoints on the validation split."
+    )
+    parser.add_argument(
+        "--checkpoint",
+        required=True,
+        help=(
+            "Exact .pt file, directory, or glob pattern "
+            "(e.g. outputs/gen_seed_40/atlas+uncond*/unet3d_best_*.pt)."
+        ),
+    )
     parser.add_argument("--split-file", required=True, help="Path to the saved train/val split CSV.")
     parser.add_argument(
         "--path-prefix",
         default=None,
         help="Optional prefix prepended to relative image/label paths from the split CSV.",
     )
-    parser.add_argument("--metrics-json", default="eval_results/metrics.json", help="Path to save metrics JSON.")
-    parser.add_argument("--vis-dir", default="eval_results/visualizations", help="Directory for visualization PNGs.")
+    parser.add_argument(
+        "--brain-mask-dir",
+        default="atlas/strip_brain_mask",
+        help=(
+            "Directory of brain mask NIfTI files matched by image basename. "
+            "Relative paths are resolved under --path-prefix when given. "
+            "Default: atlas/strip_brain_mask."
+        ),
+    )
+    parser.add_argument(
+        "--metrics-json",
+        default=None,
+        help="(Single-checkpoint only) Override output metrics JSON path.",
+    )
+    parser.add_argument(
+        "--vis-dir",
+        default=None,
+        help="(Single-checkpoint only) Override output visualization directory.",
+    )
     parser.add_argument("--vis-count", type=int, default=5, help="Number of validation samples to visualize.")
     parser.add_argument(
         "--dist-plot",
-        default="eval_results/metric_distributions.png",
-        help="Path to save Dice/IoU distribution plot. Use an empty string to disable.",
+        default=None,
+        help='Override distribution plot path. Pass empty string "" to disable.',
     )
     return parser
 
 
-def resolve_checkpoint(path_text: str) -> Path:
+def resolve_checkpoints(path_text: str) -> List[Path]:
     path = Path(path_text).expanduser()
     if path.exists():
-        return path.resolve()
-
+        if path.is_dir():
+            matches = sorted(path.glob("*.pt"))
+            if not matches:
+                raise FileNotFoundError(f"No .pt files found in directory: {path}")
+            return [p.resolve() for p in matches]
+        return [path.resolve()]
     matches = sorted(Path().glob(path_text))
-    if len(matches) == 1:
-        return matches[0].resolve()
-    if len(matches) > 1:
-        raise ValueError(f"--checkpoint matched multiple files; pass one exact path: {path_text}")
+    if matches:
+        return [p.resolve() for p in matches]
     raise FileNotFoundError(f"Checkpoint not found: {path_text}")
 
 
@@ -56,10 +96,43 @@ def auto_workers() -> int:
     return min(4, os.cpu_count() or 1)
 
 
-def create_val_loader(split_file: Path, workers: int, path_prefix: Optional[Path] = None):
+def _build_val_tf_with_brain_mask() -> Compose:
+    all_keys = ["image", "label", "brain_mask"]
+    return Compose([
+        LoadImaged(keys=all_keys, image_only=False),
+        EnsureChannelFirstd(keys=all_keys),
+        Orientationd(keys=all_keys, axcodes="RAS"),
+        Spacingd(keys=all_keys, pixdim=(1.0, 1.0, 1.0), mode=("bilinear", "nearest", "nearest")),
+        CropForegroundd(keys=all_keys, source_key="image", margin=10),
+        NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
+        EnsureTyped(keys=all_keys),
+    ])
+
+
+def create_val_loader(
+    split_file: Path,
+    workers: int,
+    path_prefix: Optional[Path] = None,
+    brain_mask_dir: Optional[Path] = None,
+):
     _, val_data = load_split(split_file, path_prefix=path_prefix)
-    _, _, val_tf, post_tf = build_transforms()
-    print(f"Preparing validation cache for {len(val_data)} samples...")
+
+    if brain_mask_dir is not None:
+        for item in val_data:
+            image_name = Path(item["image"]).name
+            brain_mask_path = brain_mask_dir / image_name
+            if not brain_mask_path.exists():
+                raise FileNotFoundError(
+                    f"Brain mask not found for sample '{image_name}': {brain_mask_path}"
+                )
+            item["brain_mask"] = str(brain_mask_path)
+        val_tf = _build_val_tf_with_brain_mask()
+    else:
+        from seg_training.data import build_transforms
+        _, _, val_tf, _ = build_transforms()
+
+    post_tf = Compose([Activations(sigmoid=True), AsDiscrete(threshold=0.5)])
+
     val_ds = CacheDataset(
         data=val_data,
         transform=val_tf,
@@ -97,7 +170,7 @@ def adapt_state_dict_keys(
 
     for prefix in ("module.", "model.", "net.", "unet.", "backbone."):
         stripped = {
-            key[len(prefix) :] if key.startswith(prefix) else key: value
+            key[len(prefix):] if key.startswith(prefix) else key: value
             for key, value in state_dict.items()
         }
         if any(key in model_keys for key in stripped):
@@ -263,7 +336,7 @@ def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], outpu
 
     axes[1, 0].boxplot(
         [dice_values, iou_values],
-        labels=["Dice", "IoU"],
+        tick_labels=["Dice", "IoU"],
         showmeans=True,
         patch_artist=True,
         boxprops={"facecolor": "#E6EEF8"},
@@ -288,6 +361,46 @@ def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], outpu
     return str(output_path)
 
 
+def save_score_vs_ratio_plot(
+    sample_metrics: Sequence[Dict[str, object]],
+    output_path: Path,
+    checkpoint_label: str,
+) -> str:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError("matplotlib is required to save score vs ratio plots.") from exc
+
+    ratios = [float(item["lesion_brain_ratio"]) for item in sample_metrics]
+    dice_values = [float(item["dice"]) for item in sample_metrics]
+    iou_values = [float(item["iou"]) for item in sample_metrics]
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    axes[0].scatter(ratios, dice_values, alpha=0.75, color="#4C78A8", edgecolors="none")
+    axes[0].set_xlabel("Lesion / Brain Volume Ratio")
+    axes[0].set_ylabel("Dice")
+    axes[0].set_title(f"Dice vs Lesion-Brain Ratio\n{checkpoint_label}")
+    axes[0].set_xlim(left=0)
+    axes[0].set_ylim(0.0, 1.0)
+
+    axes[1].scatter(ratios, iou_values, alpha=0.75, color="#59A14F", edgecolors="none")
+    axes[1].set_xlabel("Lesion / Brain Volume Ratio")
+    axes[1].set_ylabel("IoU")
+    axes[1].set_title(f"IoU vs Lesion-Brain Ratio\n{checkpoint_label}")
+    axes[1].set_xlim(left=0)
+    axes[1].set_ylim(0.0, 1.0)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(output_path)
+
+
 def evaluate(
     model: torch.nn.Module,
     val_loader,
@@ -296,7 +409,10 @@ def evaluate(
     vis_dir: Path,
     vis_count: int,
     dist_plot_path: Optional[Path],
+    ratio_plot_path: Optional[Path],
+    checkpoint_label: str,
 ) -> Dict[str, object]:
+    has_brain_mask = "brain_mask" in val_loader.dataset.data[0]
     visual_indices = set(select_visual_indices(len(val_loader.dataset), vis_count))
     sample_metrics: List[Dict[str, object]] = []
     visualizations: List[str] = []
@@ -304,7 +420,7 @@ def evaluate(
     with torch.no_grad():
         progress = tqdm(
             val_loader,
-            desc="Evaluating validation set",
+            desc="Evaluating",
             total=len(val_loader),
             unit="volume",
             dynamic_ncols=True,
@@ -317,6 +433,21 @@ def evaluate(
             dice, iou = compute_binary_metrics(pred, label)
 
             sample_name = sample_name_from_item(val_loader.dataset.data[sample_index], f"sample_{sample_index:04d}")
+
+            lesion_voxels = float((label > 0.5).sum().item())
+            if has_brain_mask:
+                brain_mask = batch["brain_mask"].to(device)
+                brain_mask_voxels = float((brain_mask > 0.5).sum().item())
+                if brain_mask_voxels == 0:
+                    bm_path = val_loader.dataset.data[sample_index].get("brain_mask", "unknown")
+                    raise RuntimeError(f"Empty brain mask for sample '{sample_name}': {bm_path}")
+                lesion_brain_ratio = lesion_voxels / brain_mask_voxels
+                brain_mask_path = str(val_loader.dataset.data[sample_index].get("brain_mask", ""))
+            else:
+                brain_mask_voxels = None
+                lesion_brain_ratio = None
+                brain_mask_path = None
+
             sample_metrics.append(
                 {
                     "index": sample_index,
@@ -325,6 +456,10 @@ def evaluate(
                     "label": str(val_loader.dataset.data[sample_index].get("label", "")),
                     "dice": dice,
                     "iou": iou,
+                    "lesion_voxels": lesion_voxels,
+                    "brain_mask_voxels": brain_mask_voxels,
+                    "lesion_brain_ratio": lesion_brain_ratio,
+                    "brain_mask_path": brain_mask_path,
                 }
             )
             running_dice = sum(item["dice"] for item in sample_metrics) / len(sample_metrics)
@@ -357,6 +492,11 @@ def evaluate(
         if dist_plot_path is not None
         else None
     )
+    ratio_plot = (
+        save_score_vs_ratio_plot(sample_metrics, ratio_plot_path, checkpoint_label)
+        if ratio_plot_path is not None and has_brain_mask
+        else None
+    )
     return {
         "dice": format_mean_std(dice_mean, dice_std),
         "iou": format_mean_std(iou_mean, iou_std),
@@ -368,62 +508,74 @@ def evaluate(
         "samples": sample_metrics,
         "visualizations": visualizations,
         "metric_distribution": metric_distribution,
+        "ratio_plot": ratio_plot,
     }
 
 
 def main() -> None:
     args = build_argparser().parse_args()
-    checkpoint_path = resolve_checkpoint(args.checkpoint)
+    checkpoints = resolve_checkpoints(args.checkpoint)
     split_file = Path(args.split_file).expanduser().resolve()
     path_prefix = Path(args.path_prefix).expanduser() if args.path_prefix else None
-    metrics_path = Path(args.metrics_json).expanduser().resolve()
-    vis_dir = Path(args.vis_dir).expanduser().resolve()
-    dist_plot_path = Path(args.dist_plot).expanduser().resolve() if args.dist_plot else None
     device = select_device()
     workers = auto_workers()
 
-    print(f"Checkpoint: {checkpoint_path}")
-    print(f"Split file: {split_file}")
-    if path_prefix is not None:
-        print(f"Path prefix: {path_prefix}")
-    if device.type == "cuda":
-        print(f"Device: cuda ({torch.cuda.get_device_name(0)})")
+    brain_mask_dir_arg = Path(args.brain_mask_dir)
+    if not brain_mask_dir_arg.is_absolute() and path_prefix is not None:
+        brain_mask_dir = (path_prefix / brain_mask_dir_arg).resolve()
     else:
-        print("Device: cpu")
-    print(f"Workers: {workers}")
+        brain_mask_dir = brain_mask_dir_arg.expanduser().resolve()
 
-    val_loader, post_tf = create_val_loader(split_file, workers, path_prefix=path_prefix)
-    model = load_model(checkpoint_path, device)
-    results = evaluate(
-        model=model,
-        val_loader=val_loader,
-        post_tf=post_tf,
-        device=device,
-        vis_dir=vis_dir,
-        vis_count=args.vis_count,
-        dist_plot_path=dist_plot_path,
+    val_loader, post_tf = create_val_loader(
+        split_file, workers, path_prefix=path_prefix, brain_mask_dir=brain_mask_dir
     )
 
-    payload = {
-        "checkpoint": str(checkpoint_path),
-        "split_file": str(split_file),
-        "path_prefix": str(path_prefix) if path_prefix is not None else None,
-        "device": str(device),
-        "workers": workers,
-        **results,
-    }
-    metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+    for checkpoint_path in checkpoints:
+        print(f"Checkpoint: {checkpoint_path}")
+        ckpt_dir = checkpoint_path.parent
 
-    print(f"Num samples: {results['num_samples']}")
-    print(f"Dice: {results['dice']}")
-    print(f"IoU: {results['iou']}")
-    print(f"Metrics JSON: {metrics_path}")
-    if results["metric_distribution"] is not None:
-        print(f"Metric distribution plot: {results['metric_distribution']}")
-    if args.vis_count > 0:
-        print(f"Visualizations: {vis_dir}")
+        metrics_path = ckpt_dir / "eval_metrics.json"
+        vis_dir = ckpt_dir / "eval_visualizations"
+        ratio_plot_path: Optional[Path] = ckpt_dir / "score_vs_lesion_brain_ratio.png"
+
+        if args.dist_plot == "":
+            dist_plot_path: Optional[Path] = None
+        else:
+            dist_plot_path = ckpt_dir / "metric_distributions.png"
+
+        # single-checkpoint path overrides for backward compat
+        if len(checkpoints) == 1:
+            if args.metrics_json is not None:
+                metrics_path = Path(args.metrics_json).expanduser().resolve()
+            if args.vis_dir is not None:
+                vis_dir = Path(args.vis_dir).expanduser().resolve()
+            if args.dist_plot not in (None, ""):
+                dist_plot_path = Path(args.dist_plot).expanduser().resolve()
+
+        model = load_model(checkpoint_path, device)
+        results = evaluate(
+            model=model,
+            val_loader=val_loader,
+            post_tf=post_tf,
+            device=device,
+            vis_dir=vis_dir,
+            vis_count=args.vis_count,
+            dist_plot_path=dist_plot_path,
+            ratio_plot_path=ratio_plot_path,
+            checkpoint_label=ckpt_dir.name,
+        )
+
+        payload = {
+            "checkpoint": str(checkpoint_path),
+            "split_file": str(split_file),
+            "path_prefix": str(path_prefix) if path_prefix is not None else None,
+            "device": str(device),
+            "workers": workers,
+            **results,
+        }
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        with metrics_path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":
