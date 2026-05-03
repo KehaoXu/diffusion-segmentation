@@ -27,6 +27,11 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--metrics-json", default="eval_results/metrics.json", help="Path to save metrics JSON.")
     parser.add_argument("--vis-dir", default="eval_results/visualizations", help="Directory for visualization PNGs.")
     parser.add_argument("--vis-count", type=int, default=5, help="Number of validation samples to visualize.")
+    parser.add_argument(
+        "--dist-plot",
+        default="eval_results/metric_distributions.png",
+        help="Path to save Dice/IoU distribution plot. Use an empty string to disable.",
+    )
     return parser
 
 
@@ -192,6 +197,9 @@ def save_visualization(
     vis_dir: Path,
 ) -> str:
     try:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
         import matplotlib.pyplot as plt
     except ImportError as exc:
         raise ImportError("matplotlib is required when --vis-count is greater than 0.") from exc
@@ -215,6 +223,71 @@ def save_visualization(
     return str(output_path)
 
 
+def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], output_path: Path) -> str:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError("matplotlib is required to save metric distribution plots.") from exc
+
+    if not sample_metrics:
+        raise RuntimeError("No sample metrics are available for plotting.")
+
+    dice_values = [float(item["dice"]) for item in sample_metrics]
+    iou_values = [float(item["iou"]) for item in sample_metrics]
+    case_indices = list(range(len(sample_metrics)))
+    sorted_dice = sorted(dice_values)
+    sorted_iou = sorted(iou_values)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    bins = [index / 20 for index in range(21)]
+    axes[0, 0].hist(dice_values, bins=bins, color="#4C78A8", alpha=0.8, edgecolor="white")
+    axes[0, 0].axvline(sum(dice_values) / len(dice_values), color="#C43C39", linestyle="--", label="mean")
+    axes[0, 0].set_title("Dice Distribution")
+    axes[0, 0].set_xlabel("Dice")
+    axes[0, 0].set_ylabel("Cases")
+    axes[0, 0].set_xlim(0.0, 1.0)
+    axes[0, 0].legend()
+
+    axes[0, 1].hist(iou_values, bins=bins, color="#59A14F", alpha=0.8, edgecolor="white")
+    axes[0, 1].axvline(sum(iou_values) / len(iou_values), color="#C43C39", linestyle="--", label="mean")
+    axes[0, 1].set_title("IoU Distribution")
+    axes[0, 1].set_xlabel("IoU")
+    axes[0, 1].set_ylabel("Cases")
+    axes[0, 1].set_xlim(0.0, 1.0)
+    axes[0, 1].legend()
+
+    axes[1, 0].boxplot(
+        [dice_values, iou_values],
+        labels=["Dice", "IoU"],
+        showmeans=True,
+        patch_artist=True,
+        boxprops={"facecolor": "#E6EEF8"},
+        medianprops={"color": "#222222"},
+        meanprops={"marker": "o", "markerfacecolor": "#C43C39", "markeredgecolor": "#C43C39"},
+    )
+    axes[1, 0].set_title("Metric Spread")
+    axes[1, 0].set_ylabel("Score")
+    axes[1, 0].set_ylim(0.0, 1.0)
+
+    axes[1, 1].plot(case_indices, sorted_dice, label="Dice", color="#4C78A8")
+    axes[1, 1].plot(case_indices, sorted_iou, label="IoU", color="#59A14F")
+    axes[1, 1].set_title("Sorted Per-Case Scores")
+    axes[1, 1].set_xlabel("Case rank")
+    axes[1, 1].set_ylabel("Score")
+    axes[1, 1].set_ylim(0.0, 1.0)
+    axes[1, 1].legend()
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return str(output_path)
+
+
 def evaluate(
     model: torch.nn.Module,
     val_loader,
@@ -222,6 +295,7 @@ def evaluate(
     device: torch.device,
     vis_dir: Path,
     vis_count: int,
+    dist_plot_path: Optional[Path],
 ) -> Dict[str, object]:
     visual_indices = set(select_visual_indices(len(val_loader.dataset), vis_count))
     sample_metrics: List[Dict[str, object]] = []
@@ -278,6 +352,11 @@ def evaluate(
 
     dice_mean, dice_std = mean_and_sample_std([item["dice"] for item in sample_metrics])
     iou_mean, iou_std = mean_and_sample_std([item["iou"] for item in sample_metrics])
+    metric_distribution = (
+        save_metric_distributions(sample_metrics, dist_plot_path)
+        if dist_plot_path is not None
+        else None
+    )
     return {
         "dice": format_mean_std(dice_mean, dice_std),
         "iou": format_mean_std(iou_mean, iou_std),
@@ -288,6 +367,7 @@ def evaluate(
         "num_samples": len(sample_metrics),
         "samples": sample_metrics,
         "visualizations": visualizations,
+        "metric_distribution": metric_distribution,
     }
 
 
@@ -298,6 +378,7 @@ def main() -> None:
     path_prefix = Path(args.path_prefix).expanduser() if args.path_prefix else None
     metrics_path = Path(args.metrics_json).expanduser().resolve()
     vis_dir = Path(args.vis_dir).expanduser().resolve()
+    dist_plot_path = Path(args.dist_plot).expanduser().resolve() if args.dist_plot else None
     device = select_device()
     workers = auto_workers()
 
@@ -320,6 +401,7 @@ def main() -> None:
         device=device,
         vis_dir=vis_dir,
         vis_count=args.vis_count,
+        dist_plot_path=dist_plot_path,
     )
 
     payload = {
@@ -338,6 +420,8 @@ def main() -> None:
     print(f"Dice: {results['dice']}")
     print(f"IoU: {results['iou']}")
     print(f"Metrics JSON: {metrics_path}")
+    if results["metric_distribution"] is not None:
+        print(f"Metric distribution plot: {results['metric_distribution']}")
     if args.vis_count > 0:
         print(f"Visualizations: {vis_dir}")
 
