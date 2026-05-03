@@ -3,7 +3,7 @@ import json
 import os
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from monai.data import CacheDataset, DataLoader
@@ -19,6 +19,11 @@ def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate one trained 3D UNet checkpoint on the validation split.")
     parser.add_argument("--checkpoint", required=True, help="Path to one checkpoint file.")
     parser.add_argument("--split-file", required=True, help="Path to the saved train/val split CSV.")
+    parser.add_argument(
+        "--path-prefix",
+        default=None,
+        help="Optional prefix prepended to relative image/label paths from the split CSV.",
+    )
     parser.add_argument("--metrics-json", default="eval_results/metrics.json", help="Path to save metrics JSON.")
     parser.add_argument("--vis-dir", default="eval_results/visualizations", help="Directory for visualization PNGs.")
     parser.add_argument("--vis-count", type=int, default=5, help="Number of validation samples to visualize.")
@@ -46,14 +51,16 @@ def auto_workers() -> int:
     return min(4, os.cpu_count() or 1)
 
 
-def create_val_loader(split_file: Path, workers: int):
-    _, val_data = load_split(split_file)
+def create_val_loader(split_file: Path, workers: int, path_prefix: Optional[Path] = None):
+    _, val_data = load_split(split_file, path_prefix=path_prefix)
     _, _, val_tf, post_tf = build_transforms()
+    print(f"Preparing validation cache for {len(val_data)} samples...")
     val_ds = CacheDataset(
         data=val_data,
         transform=val_tf,
         cache_rate=CACHE_RATE,
         num_workers=workers,
+        progress=True,
     )
     val_loader = DataLoader(
         val_ds,
@@ -221,7 +228,13 @@ def evaluate(
     visualizations: List[str] = []
 
     with torch.no_grad():
-        progress = tqdm(val_loader, desc="Evaluating")
+        progress = tqdm(
+            val_loader,
+            desc="Evaluating validation set",
+            total=len(val_loader),
+            unit="volume",
+            dynamic_ncols=True,
+        )
         for sample_index, batch in enumerate(progress):
             image = batch["image"].to(device)
             label = batch["label"].to(device)
@@ -240,7 +253,17 @@ def evaluate(
                     "iou": iou,
                 }
             )
-            progress.set_postfix({"dice": f"{dice:.4f}", "iou": f"{iou:.4f}"})
+            running_dice = sum(item["dice"] for item in sample_metrics) / len(sample_metrics)
+            running_iou = sum(item["iou"] for item in sample_metrics) / len(sample_metrics)
+            progress.set_postfix(
+                {
+                    "sample": sample_name,
+                    "dice": f"{dice:.4f}",
+                    "iou": f"{iou:.4f}",
+                    "mean_dice": f"{running_dice:.4f}",
+                    "mean_iou": f"{running_iou:.4f}",
+                }
+            )
 
             if sample_index in visual_indices:
                 visualizations.append(
@@ -272,6 +295,7 @@ def main() -> None:
     args = build_argparser().parse_args()
     checkpoint_path = resolve_checkpoint(args.checkpoint)
     split_file = Path(args.split_file).expanduser().resolve()
+    path_prefix = Path(args.path_prefix).expanduser() if args.path_prefix else None
     metrics_path = Path(args.metrics_json).expanduser().resolve()
     vis_dir = Path(args.vis_dir).expanduser().resolve()
     device = select_device()
@@ -279,13 +303,15 @@ def main() -> None:
 
     print(f"Checkpoint: {checkpoint_path}")
     print(f"Split file: {split_file}")
+    if path_prefix is not None:
+        print(f"Path prefix: {path_prefix}")
     if device.type == "cuda":
         print(f"Device: cuda ({torch.cuda.get_device_name(0)})")
     else:
         print("Device: cpu")
     print(f"Workers: {workers}")
 
-    val_loader, post_tf = create_val_loader(split_file, workers)
+    val_loader, post_tf = create_val_loader(split_file, workers, path_prefix=path_prefix)
     model = load_model(checkpoint_path, device)
     results = evaluate(
         model=model,
@@ -299,6 +325,7 @@ def main() -> None:
     payload = {
         "checkpoint": str(checkpoint_path),
         "split_file": str(split_file),
+        "path_prefix": str(path_prefix) if path_prefix is not None else None,
         "device": str(device),
         "workers": workers,
         **results,

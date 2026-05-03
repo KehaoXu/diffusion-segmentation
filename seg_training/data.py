@@ -245,8 +245,16 @@ class DatasetBuilder:
 
 def load_split(
     split_path: Path,
+    path_prefix: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     split_path = split_path.expanduser().resolve()
+    prefix = Path(path_prefix).expanduser() if path_prefix is not None else None
+
+    def apply_path_prefix(path_text: str) -> str:
+        path = Path(path_text)
+        if prefix is None or path.is_absolute():
+            return path_text
+        return str(prefix / path)
 
     train_data: List[Dict[str, str]] = []
     val_data: List[Dict[str, str]] = []
@@ -255,7 +263,10 @@ def load_split(
         reader = csv.DictReader(f)
         for row in reader:
             split_name = row["split"].strip()
-            item = {"image": row["image"], "label": row["label"]}
+            item = {
+                "image": apply_path_prefix(row["image"]),
+                "label": apply_path_prefix(row["label"]),
+            }
 
             if split_name == "train":
                 train_data.append(item)
