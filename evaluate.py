@@ -234,12 +234,20 @@ def select_dice_binned_visuals(
     return selected
 
 
-def compute_binary_metrics(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> Tuple[float, float]:
+def compute_binary_metric_components(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     pred = pred.float().reshape(pred.shape[0], -1)
     target = target.float().reshape(target.shape[0], -1)
     intersection = (pred * target).sum(dim=1)
     pred_sum = pred.sum(dim=1)
     target_sum = target.sum(dim=1)
+    return intersection, pred_sum, target_sum
+
+
+def compute_binary_metrics(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> Tuple[float, float]:
+    intersection, pred_sum, target_sum = compute_binary_metric_components(pred, target)
     union = pred_sum + target_sum - intersection
     empty = (pred_sum + target_sum) == 0
 
@@ -257,6 +265,20 @@ def mean_and_sample_std(values: Sequence[float]) -> Tuple[float, float]:
     mean = float(tensor.mean().item())
     std = float(tensor.std(unbiased=True).item()) if len(values) > 1 else 0.0
     return mean, std
+
+
+def compute_global_binary_metrics(
+    intersection: float,
+    pred_sum: float,
+    target_sum: float,
+    eps: float = 1e-8,
+) -> Tuple[float, float]:
+    union = pred_sum + target_sum - intersection
+    if pred_sum + target_sum == 0:
+        return 1.0, 1.0
+    dice = (2.0 * intersection + eps) / (pred_sum + target_sum + eps)
+    iou = (intersection + eps) / (union + eps)
+    return float(dice), float(iou)
 
 
 def format_mean_std(mean: float, std: float) -> str:
@@ -324,7 +346,12 @@ def save_visualization(
     return str(output_path)
 
 
-def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], output_path: Path) -> str:
+def save_metric_distributions(
+    sample_metrics: Sequence[Dict[str, object]],
+    output_path: Path,
+    global_dice: float,
+    global_iou: float,
+) -> str:
     try:
         import matplotlib
 
@@ -338,6 +365,8 @@ def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], outpu
 
     dice_values = [float(item["dice"]) for item in sample_metrics]
     iou_values = [float(item["iou"]) for item in sample_metrics]
+    mean_dice = sum(dice_values) / len(dice_values)
+    mean_iou = sum(iou_values) / len(iou_values)
     case_indices = list(range(len(sample_metrics)))
     sorted_dice = sorted(dice_values)
     sorted_iou = sorted(iou_values)
@@ -347,7 +376,8 @@ def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], outpu
 
     bins = [index / 20 for index in range(21)]
     axes[0, 0].hist(dice_values, bins=bins, color="#4C78A8", alpha=0.8, edgecolor="white")
-    axes[0, 0].axvline(sum(dice_values) / len(dice_values), color="#C43C39", linestyle="--", label="mean")
+    axes[0, 0].axvline(global_dice, color="#C43C39", linestyle="--", label=f"global={global_dice:.4f}")
+    axes[0, 0].axvline(mean_dice, color="#F28E2B", linestyle="--", label=f"mean={mean_dice:.4f}")
     axes[0, 0].set_title("Dice Distribution")
     axes[0, 0].set_xlabel("Dice")
     axes[0, 0].set_ylabel("Cases")
@@ -355,7 +385,8 @@ def save_metric_distributions(sample_metrics: Sequence[Dict[str, object]], outpu
     axes[0, 0].legend()
 
     axes[0, 1].hist(iou_values, bins=bins, color="#59A14F", alpha=0.8, edgecolor="white")
-    axes[0, 1].axvline(sum(iou_values) / len(iou_values), color="#C43C39", linestyle="--", label="mean")
+    axes[0, 1].axvline(global_iou, color="#C43C39", linestyle="--", label=f"global={global_iou:.4f}")
+    axes[0, 1].axvline(mean_iou, color="#F28E2B", linestyle="--", label=f"mean={mean_iou:.4f}")
     axes[0, 1].set_title("IoU Distribution")
     axes[0, 1].set_xlabel("IoU")
     axes[0, 1].set_ylabel("Cases")
@@ -393,6 +424,8 @@ def save_score_vs_ratio_plot(
     sample_metrics: Sequence[Dict[str, object]],
     output_path: Path,
     checkpoint_label: str,
+    global_dice: float,
+    global_iou: float,
 ) -> str:
     try:
         import matplotlib
@@ -405,23 +438,31 @@ def save_score_vs_ratio_plot(
     ratios = [float(item["lesion_brain_ratio"]) for item in sample_metrics]
     dice_values = [float(item["dice"]) for item in sample_metrics]
     iou_values = [float(item["iou"]) for item in sample_metrics]
+    mean_dice = sum(dice_values) / len(dice_values)
+    mean_iou = sum(iou_values) / len(iou_values)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     axes[0].scatter(ratios, dice_values, alpha=0.75, color="#4C78A8", edgecolors="none")
+    axes[0].axhline(global_dice, color="#C43C39", linestyle="--", label=f"global={global_dice:.4f}")
+    axes[0].axhline(mean_dice, color="#F28E2B", linestyle="--", label=f"mean={mean_dice:.4f}")
     axes[0].set_xlabel("Lesion / Brain Volume Ratio")
     axes[0].set_ylabel("Dice")
     axes[0].set_title(f"Dice vs Lesion-Brain Ratio\n{checkpoint_label}")
     axes[0].set_xlim(0.0, 0.02)
     axes[0].set_ylim(0.0, 1.0)
+    axes[0].legend()
 
     axes[1].scatter(ratios, iou_values, alpha=0.75, color="#59A14F", edgecolors="none")
+    axes[1].axhline(global_iou, color="#C43C39", linestyle="--", label=f"global={global_iou:.4f}")
+    axes[1].axhline(mean_iou, color="#F28E2B", linestyle="--", label=f"mean={mean_iou:.4f}")
     axes[1].set_xlabel("Lesion / Brain Volume Ratio")
     axes[1].set_ylabel("IoU")
     axes[1].set_title(f"IoU vs Lesion-Brain Ratio\n{checkpoint_label}")
     axes[1].set_xlim(0.0, 0.02)
     axes[1].set_ylim(0.0, 1.0)
+    axes[1].legend()
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -501,6 +542,9 @@ def evaluate(
 ) -> Dict[str, object]:
     has_brain_mask = "brain_mask" in val_loader.dataset.data[0]
     sample_metrics: List[Dict[str, object]] = []
+    global_intersection = 0.0
+    global_pred_sum = 0.0
+    global_target_sum = 0.0
 
     with torch.no_grad():
         progress = tqdm(
@@ -516,6 +560,10 @@ def evaluate(
             logits = sliding_window_inference(image, ROI_SIZE, SW_BATCH_SIZE, model)
             pred = post_tf(logits)
             dice, iou = compute_binary_metrics(pred, label)
+            intersections, pred_sums, target_sums = compute_binary_metric_components(pred, label)
+            global_intersection += float(intersections.sum().item())
+            global_pred_sum += float(pred_sums.sum().item())
+            global_target_sum += float(target_sums.sum().item())
 
             sample_name = sample_name_from_item(val_loader.dataset.data[sample_index], f"sample_{sample_index:04d}")
 
@@ -549,18 +597,29 @@ def evaluate(
             )
             running_dice = sum(item["dice"] for item in sample_metrics) / len(sample_metrics)
             running_iou = sum(item["iou"] for item in sample_metrics) / len(sample_metrics)
+            running_global_dice, _ = compute_global_binary_metrics(
+                global_intersection,
+                global_pred_sum,
+                global_target_sum,
+            )
             progress.set_postfix(
                 {
                     "sample": sample_name,
                     "dice": f"{dice:.4f}",
                     "iou": f"{iou:.4f}",
                     "mean_dice": f"{running_dice:.4f}",
+                    "global_dice": f"{running_global_dice:.4f}",
                     "mean_iou": f"{running_iou:.4f}",
                 }
             )
 
     dice_mean, dice_std = mean_and_sample_std([item["dice"] for item in sample_metrics])
     iou_mean, iou_std = mean_and_sample_std([item["iou"] for item in sample_metrics])
+    global_dice, global_iou = compute_global_binary_metrics(
+        global_intersection,
+        global_pred_sum,
+        global_target_sum,
+    )
     visualizations = save_dice_binned_visualizations(
         model=model,
         val_loader=val_loader,
@@ -571,16 +630,27 @@ def evaluate(
         vis_count=vis_count,
     )
     metric_distribution = (
-        save_metric_distributions(sample_metrics, dist_plot_path)
+        save_metric_distributions(sample_metrics, dist_plot_path, global_dice, global_iou)
         if dist_plot_path is not None
         else None
     )
     ratio_plot = (
-        save_score_vs_ratio_plot(sample_metrics, ratio_plot_path, checkpoint_label)
+        save_score_vs_ratio_plot(sample_metrics, ratio_plot_path, checkpoint_label, global_dice, global_iou)
         if ratio_plot_path is not None and has_brain_mask
         else None
     )
     return {
+        "mean_dice": dice_mean,
+        "mean_dice_std": dice_std,
+        "mean_dice_text": format_mean_std(dice_mean, dice_std),
+        "mean_iou": iou_mean,
+        "mean_iou_std": iou_std,
+        "mean_iou_text": format_mean_std(iou_mean, iou_std),
+        "global_dice": global_dice,
+        "global_iou": global_iou,
+        "global_intersection": global_intersection,
+        "global_pred_voxels": global_pred_sum,
+        "global_target_voxels": global_target_sum,
         "dice": format_mean_std(dice_mean, dice_std),
         "iou": format_mean_std(iou_mean, iou_std),
         "dice_mean": dice_mean,
