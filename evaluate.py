@@ -64,7 +64,7 @@ def build_argparser() -> argparse.ArgumentParser:
         default=None,
         help="(Single-checkpoint only) Override output visualization directory.",
     )
-    parser.add_argument("--vis-count", type=int, default=5, help="Number of validation samples to visualize.")
+    parser.add_argument("--vis-count", type=int, default=5, help="Number of validation samples to visualize per Dice bin.")
     parser.add_argument(
         "--dist-plot",
         default=None,
@@ -204,11 +204,34 @@ def sample_name_from_item(item: Dict[str, object], fallback: str) -> str:
     return name or fallback
 
 
-def select_visual_indices(num_samples: int, vis_count: int) -> List[int]:
-    if vis_count <= 0 or num_samples <= 0:
-        return []
-    count = min(vis_count, num_samples)
-    return sorted(random.SystemRandom().sample(range(num_samples), count))
+def dice_bin_name(dice: float) -> str:
+    bin_index = min(int(dice / 0.2), 4)
+    lower = bin_index * 0.2
+    upper = lower + 0.2
+    return f"dice_{lower:.1f}_{upper:.1f}"
+
+
+def select_dice_binned_visuals(
+    sample_metrics: Sequence[Dict[str, object]],
+    vis_count: int,
+) -> Dict[int, str]:
+    if vis_count <= 0:
+        return {}
+
+    bins: Dict[str, List[int]] = {f"dice_{index / 5:.1f}_{(index + 1) / 5:.1f}": [] for index in range(5)}
+    for item in sample_metrics:
+        dice = float(item["dice"])
+        bins[dice_bin_name(dice)].append(int(item["index"]))
+
+    rng = random.SystemRandom()
+    selected: Dict[int, str] = {}
+    for bin_name, indices in bins.items():
+        if not indices:
+            continue
+        count = min(vis_count, len(indices))
+        for sample_index in rng.sample(indices, count):
+            selected[sample_index] = bin_name
+    return selected
 
 
 def compute_binary_metrics(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> Tuple[float, float]:
@@ -268,6 +291,7 @@ def save_visualization(
     pred: torch.Tensor,
     sample_name: str,
     vis_dir: Path,
+    dice: float,
 ) -> str:
     try:
         import matplotlib
@@ -286,7 +310,7 @@ def save_visualization(
     axis.imshow(image_slice, cmap="gray")
     axis.imshow(label_slice, cmap="Greens", alpha=0.35, vmin=0.0, vmax=1.0)
     axis.imshow(pred_slice, cmap="Reds", alpha=0.35, vmin=0.0, vmax=1.0)
-    axis.set_title("Image + GT(green) + Pred(red)")
+    axis.set_title(f"Image + GT(green) + Pred(red) | Dice={dice:.4f}")
     axis.axis("off")
     fig.tight_layout()
 
@@ -385,20 +409,73 @@ def save_score_vs_ratio_plot(
     axes[0].set_xlabel("Lesion / Brain Volume Ratio")
     axes[0].set_ylabel("Dice")
     axes[0].set_title(f"Dice vs Lesion-Brain Ratio\n{checkpoint_label}")
-    axes[0].set_xlim(left=0)
+    axes[0].set_xlim(0.0, 0.02)
     axes[0].set_ylim(0.0, 1.0)
 
     axes[1].scatter(ratios, iou_values, alpha=0.75, color="#59A14F", edgecolors="none")
     axes[1].set_xlabel("Lesion / Brain Volume Ratio")
     axes[1].set_ylabel("IoU")
     axes[1].set_title(f"IoU vs Lesion-Brain Ratio\n{checkpoint_label}")
-    axes[1].set_xlim(left=0)
+    axes[1].set_xlim(0.0, 0.02)
     axes[1].set_ylim(0.0, 1.0)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return str(output_path)
+
+
+def save_dice_binned_visualizations(
+    model: torch.nn.Module,
+    val_loader,
+    post_tf,
+    device: torch.device,
+    vis_dir: Path,
+    sample_metrics: Sequence[Dict[str, object]],
+    vis_count: int,
+) -> List[str]:
+    selected_bins = select_dice_binned_visuals(sample_metrics, vis_count)
+    if not selected_bins:
+        return []
+
+    metrics_by_index = {int(item["index"]): item for item in sample_metrics}
+    visualizations: List[str] = []
+
+    with torch.no_grad():
+        progress = tqdm(
+            val_loader,
+            desc="Saving Dice-binned visuals",
+            total=len(val_loader),
+            unit="volume",
+            dynamic_ncols=True,
+        )
+        for sample_index, batch in enumerate(progress):
+            bin_name = selected_bins.get(sample_index)
+            if bin_name is None:
+                continue
+
+            image = batch["image"].to(device)
+            label = batch["label"].to(device)
+            logits = sliding_window_inference(image, ROI_SIZE, SW_BATCH_SIZE, model)
+            pred = post_tf(logits)
+            metric = metrics_by_index[sample_index]
+            sample_name = str(metric["sample"])
+            dice = float(metric["dice"])
+            visualizations.append(
+                save_visualization(
+                    image=image,
+                    label=label,
+                    pred=pred,
+                    sample_name=sample_name,
+                    vis_dir=vis_dir / bin_name,
+                    dice=dice,
+                )
+            )
+            del selected_bins[sample_index]
+            if not selected_bins:
+                break
+
+    return visualizations
 
 
 def evaluate(
@@ -413,9 +490,7 @@ def evaluate(
     checkpoint_label: str,
 ) -> Dict[str, object]:
     has_brain_mask = "brain_mask" in val_loader.dataset.data[0]
-    visual_indices = set(select_visual_indices(len(val_loader.dataset), vis_count))
     sample_metrics: List[Dict[str, object]] = []
-    visualizations: List[str] = []
 
     with torch.no_grad():
         progress = tqdm(
@@ -474,19 +549,17 @@ def evaluate(
                 }
             )
 
-            if sample_index in visual_indices:
-                visualizations.append(
-                    save_visualization(
-                        image=image,
-                        label=label,
-                        pred=pred,
-                        sample_name=sample_name,
-                        vis_dir=vis_dir,
-                    )
-                )
-
     dice_mean, dice_std = mean_and_sample_std([item["dice"] for item in sample_metrics])
     iou_mean, iou_std = mean_and_sample_std([item["iou"] for item in sample_metrics])
+    visualizations = save_dice_binned_visualizations(
+        model=model,
+        val_loader=val_loader,
+        post_tf=post_tf,
+        device=device,
+        vis_dir=vis_dir,
+        sample_metrics=sample_metrics,
+        vis_count=vis_count,
+    )
     metric_distribution = (
         save_metric_distributions(sample_metrics, dist_plot_path)
         if dist_plot_path is not None
@@ -533,15 +606,16 @@ def main() -> None:
     for checkpoint_path in checkpoints:
         print(f"Checkpoint: {checkpoint_path}")
         ckpt_dir = checkpoint_path.parent
+        eval_dir = ckpt_dir / "eval"
 
-        metrics_path = ckpt_dir / "eval_metrics.json"
-        vis_dir = ckpt_dir / "eval_visualizations"
-        ratio_plot_path: Optional[Path] = ckpt_dir / "score_vs_lesion_brain_ratio.png"
+        metrics_path = eval_dir / "eval_metrics.json"
+        vis_dir = eval_dir / "visualizations"
+        ratio_plot_path: Optional[Path] = eval_dir / "score_vs_lesion_brain_ratio.png"
 
         if args.dist_plot == "":
             dist_plot_path: Optional[Path] = None
         else:
-            dist_plot_path = ckpt_dir / "metric_distributions.png"
+            dist_plot_path = eval_dir / "metric_distributions.png"
 
         # single-checkpoint path overrides for backward compat
         if len(checkpoints) == 1:
