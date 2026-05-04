@@ -292,6 +292,7 @@ def save_visualization(
     sample_name: str,
     vis_dir: Path,
     dice: float,
+    lesion_brain_ratio: Optional[float] = None,
 ) -> str:
     try:
         import matplotlib
@@ -310,9 +311,12 @@ def save_visualization(
     axis.imshow(image_slice, cmap="gray")
     axis.imshow(label_slice, cmap="Greens", alpha=0.35, vmin=0.0, vmax=1.0)
     axis.imshow(pred_slice, cmap="Reds", alpha=0.35, vmin=0.0, vmax=1.0)
-    axis.set_title(f"Image + GT(green) + Pred(red) | Dice={dice:.4f}")
+    title = f"Image + GT(green) + Pred(red) | Dice={dice:.4f}"
+    if lesion_brain_ratio is not None:
+        title += f"\nLesion/Brain Ratio={lesion_brain_ratio:.6f}"
+    axis.set_title(title)
     axis.axis("off")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
 
     output_path = vis_dir / f"{sample_name}.png"
     fig.savefig(output_path, bbox_inches="tight")
@@ -461,6 +465,7 @@ def save_dice_binned_visualizations(
             metric = metrics_by_index[sample_index]
             sample_name = str(metric["sample"])
             dice = float(metric["dice"])
+            lesion_brain_ratio = metric.get("lesion_brain_ratio")
             visualizations.append(
                 save_visualization(
                     image=image,
@@ -469,6 +474,11 @@ def save_dice_binned_visualizations(
                     sample_name=sample_name,
                     vis_dir=vis_dir / bin_name,
                     dice=dice,
+                    lesion_brain_ratio=(
+                        float(lesion_brain_ratio)
+                        if lesion_brain_ratio is not None
+                        else None
+                    ),
                 )
             )
             del selected_bins[sample_index]
