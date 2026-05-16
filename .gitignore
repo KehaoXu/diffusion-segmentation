@@ -1,5 +1,5 @@
 atlas
-USB/assets
+USB/assets/
 logs
 wandb
 *.pt
@@ -12,3 +12,4 @@ others
 run_train.ipynb
 run_usb.ipynb
 *.sbatch
+img/
