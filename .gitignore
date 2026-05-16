@@ -10,3 +10,5 @@ vis_results
 outputs
 others
 run_train.ipynb
+run_usb.ipynb
+.sbatch
