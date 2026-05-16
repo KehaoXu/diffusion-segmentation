@@ -259,7 +259,7 @@ def load_split(
     train_data: List[Dict[str, str]] = []
     val_data: List[Dict[str, str]] = []
 
-    with split_path.open("r", newline="") as f:
+    with split_path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             split_name = row["split"].strip()

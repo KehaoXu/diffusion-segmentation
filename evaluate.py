@@ -246,16 +246,24 @@ def compute_binary_metric_components(
     return intersection, pred_sum, target_sum
 
 
-def compute_binary_metrics(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> Tuple[float, float]:
+def compute_binary_metrics(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> Tuple[float, float, float, float]:
     intersection, pred_sum, target_sum = compute_binary_metric_components(pred, target)
     union = pred_sum + target_sum - intersection
     empty = (pred_sum + target_sum) == 0
+    pred_empty = pred_sum == 0
+    target_empty = target_sum == 0
 
     dice = (2.0 * intersection + eps) / (pred_sum + target_sum + eps)
     iou = (intersection + eps) / (union + eps)
+    precision = (intersection + eps) / (pred_sum + eps)
+    recall = (intersection + eps) / (target_sum + eps)
     dice = torch.where(empty, torch.ones_like(dice), dice)
     iou = torch.where(empty, torch.ones_like(iou), iou)
-    return float(dice.mean().item()), float(iou.mean().item())
+    precision = torch.where(empty, torch.ones_like(precision), precision)
+    precision = torch.where(pred_empty & ~empty, torch.zeros_like(precision), precision)
+    recall = torch.where(empty, torch.ones_like(recall), recall)
+    recall = torch.where(target_empty & ~empty, torch.zeros_like(recall), recall)
+    return float(dice.mean().item()), float(iou.mean().item()), float(precision.mean().item()), float(recall.mean().item())
 
 
 def mean_and_sample_std(values: Sequence[float]) -> Tuple[float, float]:
@@ -272,13 +280,15 @@ def compute_global_binary_metrics(
     pred_sum: float,
     target_sum: float,
     eps: float = 1e-8,
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float, float]:
     union = pred_sum + target_sum - intersection
     if pred_sum + target_sum == 0:
-        return 1.0, 1.0
+        return 1.0, 1.0, 1.0, 1.0
     dice = (2.0 * intersection + eps) / (pred_sum + target_sum + eps)
     iou = (intersection + eps) / (union + eps)
-    return float(dice), float(iou)
+    precision = 0.0 if pred_sum == 0 else (intersection + eps) / (pred_sum + eps)
+    recall = 0.0 if target_sum == 0 else (intersection + eps) / (target_sum + eps)
+    return float(dice), float(iou), float(precision), float(recall)
 
 
 def format_mean_std(mean: float, std: float) -> str:
@@ -559,7 +569,7 @@ def evaluate(
             label = batch["label"].to(device)
             logits = sliding_window_inference(image, ROI_SIZE, SW_BATCH_SIZE, model)
             pred = post_tf(logits)
-            dice, iou = compute_binary_metrics(pred, label)
+            dice, iou, precision, recall = compute_binary_metrics(pred, label)
             intersections, pred_sums, target_sums = compute_binary_metric_components(pred, label)
             global_intersection += float(intersections.sum().item())
             global_pred_sum += float(pred_sums.sum().item())
@@ -589,6 +599,8 @@ def evaluate(
                     "label": str(val_loader.dataset.data[sample_index].get("label", "")),
                     "dice": dice,
                     "iou": iou,
+                    "precision": precision,
+                    "recall": recall,
                     "lesion_voxels": lesion_voxels,
                     "brain_mask_voxels": brain_mask_voxels,
                     "lesion_brain_ratio": lesion_brain_ratio,
@@ -596,8 +608,9 @@ def evaluate(
                 }
             )
             running_dice = sum(item["dice"] for item in sample_metrics) / len(sample_metrics)
-            running_iou = sum(item["iou"] for item in sample_metrics) / len(sample_metrics)
-            running_global_dice, _ = compute_global_binary_metrics(
+            running_precision = sum(item["precision"] for item in sample_metrics) / len(sample_metrics)
+            running_recall = sum(item["recall"] for item in sample_metrics) / len(sample_metrics)
+            running_global_dice, *_ = compute_global_binary_metrics(
                 global_intersection,
                 global_pred_sum,
                 global_target_sum,
@@ -606,16 +619,20 @@ def evaluate(
                 {
                     "sample": sample_name,
                     "dice": f"{dice:.4f}",
-                    "iou": f"{iou:.4f}",
+                    "prec": f"{precision:.4f}",
+                    "rec": f"{recall:.4f}",
                     "mean_dice": f"{running_dice:.4f}",
                     "global_dice": f"{running_global_dice:.4f}",
-                    "mean_iou": f"{running_iou:.4f}",
+                    "mean_prec": f"{running_precision:.4f}",
+                    "mean_rec": f"{running_recall:.4f}",
                 }
             )
 
     dice_mean, dice_std = mean_and_sample_std([item["dice"] for item in sample_metrics])
     iou_mean, iou_std = mean_and_sample_std([item["iou"] for item in sample_metrics])
-    global_dice, global_iou = compute_global_binary_metrics(
+    precision_mean, precision_std = mean_and_sample_std([item["precision"] for item in sample_metrics])
+    recall_mean, recall_std = mean_and_sample_std([item["recall"] for item in sample_metrics])
+    global_dice, global_iou, global_precision, global_recall = compute_global_binary_metrics(
         global_intersection,
         global_pred_sum,
         global_target_sum,
@@ -646,17 +663,31 @@ def evaluate(
         "mean_iou": iou_mean,
         "mean_iou_std": iou_std,
         "mean_iou_text": format_mean_std(iou_mean, iou_std),
+        "mean_precision": precision_mean,
+        "mean_precision_std": precision_std,
+        "mean_precision_text": format_mean_std(precision_mean, precision_std),
+        "mean_recall": recall_mean,
+        "mean_recall_std": recall_std,
+        "mean_recall_text": format_mean_std(recall_mean, recall_std),
         "global_dice": global_dice,
         "global_iou": global_iou,
+        "global_precision": global_precision,
+        "global_recall": global_recall,
         "global_intersection": global_intersection,
         "global_pred_voxels": global_pred_sum,
         "global_target_voxels": global_target_sum,
         "dice": format_mean_std(dice_mean, dice_std),
         "iou": format_mean_std(iou_mean, iou_std),
+        "precision": format_mean_std(precision_mean, precision_std),
+        "recall": format_mean_std(recall_mean, recall_std),
         "dice_mean": dice_mean,
         "dice_std": dice_std,
         "iou_mean": iou_mean,
         "iou_std": iou_std,
+        "precision_mean": precision_mean,
+        "precision_std": precision_std,
+        "recall_mean": recall_mean,
+        "recall_std": recall_std,
         "num_samples": len(sample_metrics),
         "samples": sample_metrics,
         "visualizations": visualizations,

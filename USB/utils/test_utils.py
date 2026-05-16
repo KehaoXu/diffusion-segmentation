@@ -66,8 +66,14 @@ def save_volume_and_slice(
         affine = np.eye(4)
 
     vol_path = os.path.join(result_dir, f"{name_prefix}.nii.gz")
+    slice_path = os.path.join(result_dir, f"{name_prefix}.png")
 
-    nib.save(nib.Nifti1Image(volume, affine=affine), vol_path)
+    if os.path.exists(vol_path) and os.path.exists(slice_path):
+        print(f"Files for {name_prefix} exist, skip!")
+        return vol_path, slice_path
+
+    if not os.path.exists(vol_path):
+        nib.save(nib.Nifti1Image(volume, affine=affine), vol_path)
 
     mid_slice = np.rot90(volume[:, slice_idx, :])
 
@@ -77,13 +83,18 @@ def save_volume_and_slice(
         mid_slice = morphology.remove_small_holes(mid_slice, area_threshold=50).astype(np.float32)
 
     mid_slice = get_slice(mid_slice)
-
-    slice_path = os.path.join(result_dir, f"{name_prefix}.png")
     
-
-    plt.imsave(slice_path, mid_slice, cmap="gray")
+    if not os.path.exists(slice_path):
+        plt.imsave(slice_path, mid_slice, cmap="gray")
 
     return vol_path, slice_path
+
+
+def generated_volume_and_slice_exist(result_dir, name_prefix):
+    return (
+        os.path.exists(os.path.join(result_dir, f"{name_prefix}.nii.gz"))
+        and os.path.exists(os.path.join(result_dir, f"{name_prefix}.png"))
+    )
 
 
 class Test():
@@ -175,37 +186,56 @@ class Test():
             batch_size = sample_config.batch_size
             batch_num = np.ceil(img_num / batch_size).astype(int)
             result_dir = sample_config.result_dir
-            for batch in range(batch_num):
-                n_batch = min(batch_size, img_num - batch * batch_size)
+            os.makedirs(result_dir, exist_ok=True)
+            with tqdm(total=img_num, desc="Generating", file=sys.__stdout__) as pbar:
+                for batch in range(batch_num):
+                    n_batch = min(batch_size, img_num - batch * batch_size)
+                    batch_indices = range(batch * batch_size, batch * batch_size + n_batch)
+                    existing_indices = {
+                        idx for idx in batch_indices
+                        if generated_volume_and_slice_exist(result_dir, f"x0_{idx}")
+                        and generated_volume_and_slice_exist(result_dir, f"y0_{idx}")
+                    }
+                    if len(existing_indices) == n_batch:
+                        pbar.update(n_batch)
+                        continue
 
-                xt = torch.randn((n_batch, model_config.in_channels) + tuple(model_config.initial_resolution)).to(device)
-                yt = torch.randn((n_batch, model_config.in_channels) + tuple(model_config.initial_resolution)).to(device)
-                xts, yts, x0s, y0s = denoise_uncond(x_model, y_model, xt, yt, denoise_t_list, betas, eta)
+                    xt = torch.randn((n_batch, model_config.in_channels) + tuple(model_config.initial_resolution)).to(device)
+                    yt = torch.randn((n_batch, model_config.in_channels) + tuple(model_config.initial_resolution)).to(device)
+                    xts, yts, x0s, y0s = denoise_uncond(
+                        x_model, y_model, xt, yt, denoise_t_list, betas, eta,
+                        show_progress=False,
+                    )
 
-                x0, y0 = x0s[-1], y0s[-1]
-                if not os.path.exists(result_dir):
-                    os.makedirs(result_dir)
+                    x0, y0 = x0s[-1], y0s[-1]
+                    if not os.path.exists(result_dir):
+                        os.makedirs(result_dir)
 
-                self.vae = self.vae.to(device)
+                    self.vae = self.vae.to(device)
 
-                x0 = 1 / 0.18215 * x0
-                x0 = self.vae.decode([x0])[0]._sample()
+                    x0 = 1 / 0.18215 * x0
+                    x0 = self.vae.decode([x0])[0]._sample()
 
-                y0 = 1 / 0.18215 * y0
-                y0 = self.vae.decode([y0])[0]._sample()
+                    y0 = 1 / 0.18215 * y0
+                    y0 = self.vae.decode([y0])[0]._sample()
                 
-                x0 = x0.detach().cpu().numpy()
-                y0 = y0.detach().cpu().numpy()                   
+                    x0 = x0.detach().cpu().numpy()
+                    y0 = y0.detach().cpu().numpy()
                 
-                for i in tqdm(range(x0.shape[0]), desc='saving'):
+                    for i in range(x0.shape[0]):
 
-                    volume_x = x0[i, 0]
-                    volume_y = y0[i, 0]
+                        volume_x = x0[i, 0]
+                        volume_y = y0[i, 0]
 
-                    idx = batch * batch_size + i
+                        idx = batch * batch_size + i
 
-                    save_volume_and_slice(volume_x, result_dir, f"x0_{idx}", do_binary=True)
-                    save_volume_and_slice(volume_y, result_dir, f"y0_{idx}", do_binary=False)
+                        if idx in existing_indices:
+                            continue
+
+                        save_volume_and_slice(volume_x, result_dir, f"x0_{idx}", do_binary=True)
+                        save_volume_and_slice(volume_y, result_dir, f"y0_{idx}", do_binary=False)
+
+                    pbar.update(n_batch)
     
 
     def cond_gen(self):

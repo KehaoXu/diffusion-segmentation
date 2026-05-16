@@ -32,7 +32,7 @@ def one_step_denoise(model, xt, cond, t, betas, t_next=None, eta=0.0):
         return x0_pred
 
 
-def denoise_uncond(x_model, y_model, xt, yt, t_list, betas, eta=0.0):
+def denoise_uncond(x_model, y_model, xt, yt, t_list, betas, eta=0.0, show_progress=True):
     assert xt.shape == yt.shape
     assert xt.device == yt.device
     x_model.eval()
@@ -46,7 +46,11 @@ def denoise_uncond(x_model, y_model, xt, yt, t_list, betas, eta=0.0):
         y0s = []
         xts = [xt] 
         yts = [yt]
-        for i, j in tqdm(zip(reversed(t_list), reversed(t_next_list)), desc='denoising', total=len(t_list)):
+        denoise_steps = zip(reversed(t_list), reversed(t_next_list))
+        if show_progress:
+            denoise_steps = tqdm(denoise_steps, desc='denoising', total=len(t_list))
+
+        for i, j in denoise_steps:
             t = (torch.ones(img_num) * i).to(device)
             t_next = (torch.ones(img_num) * j).to(device)
             xt = xts[-1].to(device)

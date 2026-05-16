@@ -41,7 +41,7 @@ uncond_gen:
   skip_type: 'uniform' # options: 'uniform', 'quad'
   num_sample_timesteps: 300
   eta: 0.0
-  img_num: 16
+  img_num: 500
   batch_size: 1
 
 cond_gen:
