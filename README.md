@@ -12,7 +12,7 @@ Training and evaluation code for 3D binary lesion segmentation with a MONAI 3D U
 +-- train.py                  # Train the segmentation model
 +-- evaluate.py               # Evaluate trained checkpoints
 +-- seg_training/             # Model, data pipeline, training loop, run logging
-+-- USB/                      # Synthetic-data generation support code
++-- USB/                      # Synthetic-data generation code from [USB](https://github.com/jhuldr/USB.git)
 ```
 
 ## Environment
