@@ -13,3 +13,4 @@ run_train.ipynb
 run_usb.ipynb
 *.sbatch
 img/
+eval.py
