@@ -1,4 +1,3 @@
-import csv
 import glob
 import os
 import random
@@ -32,6 +31,7 @@ from monai.transforms import (
 )
 
 from .config import TrainConfig
+from .splits import load_split_csv, save_split_csv
 
 
 CACHE_RATE = 1.0
@@ -209,38 +209,15 @@ class DatasetBuilder:
     ) -> Path:
         data_list = self.build_real_list()
         train_data, val_data = self.split_train_val(data_list)
-        
-        train_ratio=self.train_ratio
-        split_seed=self.split_seed
 
-        split_path = split_path.expanduser().resolve()
-        split_path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = [
-            "split",
-            "image",
-            "label",
-            "train_ratio",
-            "split_seed",
-        ]
-        with split_path.open("w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for split_name, items in (("train", train_data), ("val", val_data)):
-                for item in items:
-                    writer.writerow(
-                        {
-                            "split": split_name,
-                            "image": item["image"],
-                            "label": item["label"],
-                            "train_ratio": train_ratio,
-                            "split_seed": split_seed,
-                        }
-                    )
+        split_path = save_split_csv(split_path, train_data, val_data)
         print(
             f"\nSaved split file: {split_path}"
             f"\ntrain={len(train_data)}, val={len(val_data)}"
-            f"\nsplit_seed={split_seed}"
+            f"\ntrain_ratio={self.train_ratio:g}"
+            f"\nsplit_seed={self.split_seed}"
         )
+        return split_path
 
 
 def load_split(
@@ -248,35 +225,7 @@ def load_split(
     path_prefix: Optional[Path] = None,
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     split_path = split_path.expanduser().resolve()
-    prefix = Path(path_prefix).expanduser() if path_prefix is not None else None
-
-    def apply_path_prefix(path_text: str) -> str:
-        path = Path(path_text)
-        if prefix is None or path.is_absolute():
-            return path_text
-        return str(prefix / path)
-
-    train_data: List[Dict[str, str]] = []
-    val_data: List[Dict[str, str]] = []
-
-    with split_path.open("r", newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            split_name = row["split"].strip()
-            item = {
-                "image": apply_path_prefix(row["image"]),
-                "label": apply_path_prefix(row["label"]),
-            }
-
-            if split_name == "train":
-                train_data.append(item)
-            elif split_name == "val":
-                val_data.append(item)
-            else:
-                raise ValueError(f"Unknown split name '{split_name}' in {split_path}")
-
-    train_data = list(train_data)
-    val_data = list(val_data)
+    train_data, val_data = load_split_csv(split_path, path_prefix=path_prefix)
 
     print(f"[Split] loaded train={len(train_data)}, val={len(val_data)} from {split_path}")
 

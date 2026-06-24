@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from seg_training.data import DatasetBuilder
+from seg_training.splits import split_filename
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -19,7 +20,11 @@ def build_argparser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_argparser().parse_args()
-    split_path = Path(args.split_file).expanduser().resolve()
+    split_path = split_filename(
+        Path(args.split_file),
+        train_ratio=args.train_ratio,
+        split_seed=args.split_seed,
+    ).expanduser().resolve()
     if split_path.exists():
         print(f"Split file already exists: {split_path}, skipping split.")
         return
