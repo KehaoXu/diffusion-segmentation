@@ -1,4 +1,4 @@
-# Synthetic MRI Augmentation for 3D Brain Lesion Segmentation
+# Diffusion-Based Synthetic MRI Augmentation for 3D Brain Lesion Segmentation
 
 A reproducible MONAI/PyTorch project for evaluating how diffusion-generated synthetic MRI data affects downstream 3D lesion segmentation. The workflow builds fixed data splits, mixes real and synthetic samples, trains a 3D U-Net, and summarizes performance across synthetic-to-real ratios.
 
