@@ -20,5 +20,5 @@ tests/
 atlas_train_val_0.8_42.csv
 atlas_smoke_split.csv
 test.ipynb
-docs/superpowers/plans/2026-06-26-mle-portfolio-hardening.md
+docs/superpowers/
 scripts/
