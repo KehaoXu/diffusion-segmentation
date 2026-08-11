@@ -6,6 +6,7 @@ wandb
 *.pyc
 .vscode
 .codex
+.worktrees/
 vis_results
 outputs
 others
@@ -15,3 +16,8 @@ run_usb.ipynb
 img/
 eval.py
 *.gslides
+tests/
+split_train_val.py
+atlas_smoke_split.csv
+test.ipynb
+docs/superpowers/plans/2026-06-26-mle-portfolio-hardening.md
