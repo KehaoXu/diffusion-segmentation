@@ -138,8 +138,8 @@ class AlignAxesd(MapTransform):
 class DatasetBuilder:
     def __init__(
         self,
-        real_root: Path = Path("/scratch/peirong/kxu56/atlas"),
-        gen_root: Path = Path("/scratch/peirong/kxu56/USB/assets/uncond_gen"),
+        real_root: Path = Path("atlas"),
+        gen_root: Path = Path("USB/assets/uncond_gen"),
         split_seed: int = 42,
         gen_seed: int = 42,
         train_ratio: float = 0.8,

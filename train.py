@@ -13,7 +13,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train 3D UNet segmentation model.")
     parser.add_argument("--out-dir", default="outputs/atlas")
     parser.add_argument("--split-file", required=True)
-    parser.add_argument("--gen-root", default="/scratch/peirong/kxu56/USB/assets/uncond")
+    parser.add_argument("--gen-root", default="USB/assets/uncond")
     parser.add_argument("--gen-ratio", type=float, default=0.0)
     parser.add_argument("--gen-seed", type=int, default=42)
     parser.add_argument("--cache-workers", type=int, default=16)
