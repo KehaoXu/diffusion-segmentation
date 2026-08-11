@@ -1,18 +1,17 @@
 # Diffusion-Based Synthetic MRI Augmentation for 3D Brain Lesion Segmentation
 
-A reproducible MONAI/PyTorch project for evaluating how diffusion-generated synthetic MRI data affects downstream 3D lesion segmentation. The workflow builds fixed data splits, mixes real and synthetic samples, trains a 3D U-Net, and summarizes performance across synthetic-to-real ratios.
+Evaluate how diffusion-generated synthetic MRI data affects downstream 3D lesion segmentation. The workflow builds fixed data splits, mixes real and synthetic samples, trains a 3D U-Net, and summarizes performance across synthetic-to-real ratios.
 
 ## Highlights
 
 - Built a 3D U-Net lesion segmentation pipeline with fixed train/validation splits, checkpointing, metric logging, and evaluation scripts.
 - Mixed real ATLAS MRI cases with synthetic samples generated externally by the [USB](https://github.com/jhuldr/USB.git) pipeline.
 - Evaluated synthetic-to-real ratios from `0.0` to `0.9` across existing split and generation seeds.
-- Aggregated 70 completed evaluation runs and generated result tables and plots.
 
 ## Key Result
 
 Existing experiments show modest average gains from synthetic augmentation over the real-only baseline. The results suggest that the synthetic-to-real ratio should be tuned and evaluated systematically rather than maximized blindly.
-
+<!-- 
 | Synthetic ratio | Dice mean +/- std | Delta Dice | IoU | Precision | Recall |
 |---:|---:|---:|---:|---:|---:|
 | 0.0 | 0.5701 +/- 0.0264 | +0.0000 | 0.4486 | 0.6373 | 0.6021 |
@@ -24,27 +23,26 @@ Existing experiments show modest average gains from synthetic augmentation over 
 | 0.6 | 0.5835 +/- 0.0129 | +0.0134 | 0.4611 | 0.6644 | 0.6034 |
 | 0.7 | 0.5841 +/- 0.0087 | +0.0140 | 0.4623 | 0.6646 | 0.6054 |
 | 0.8 | 0.5866 +/- 0.0075 | +0.0165 | 0.4652 | 0.6740 | 0.6015 |
-| 0.9 | 0.5891 +/- 0.0060 | +0.0189 | 0.4663 | 0.6586 | 0.6129 |
+| 0.9 | 0.5891 +/- 0.0060 | +0.0189 | 0.4663 | 0.6586 | 0.6129 | -->
 
 ![Mean Dice vs synthetic-to-real ratio](results/ratio_vs_dice.svg)
 
 Detailed generated artifacts:
 
-- [Synthetic ratio summary](results/synthetic_ratio_summary.md)
-- [CSV summary](results/synthetic_ratio_summary.csv)
-- [Ratio vs Dice plot](results/ratio_vs_dice.svg)
+- [Result summary](results/synthetic_ratio_summary.csv)
+<!-- - [Ratio vs Dice plot](results/ratio_vs_dice.svg) -->
 
 ## Repository Layout
 
 ```text
 .
 +-- atlas_train_val_0.8_42.csv       # Compact train/validation split CSV
-+-- split_train_val.py               # Create fixed train/validation splits
+<!-- +-- split_train_val.py               # Create fixed train/validation splits -->
 +-- train.py                         # Train the segmentation model
 +-- evaluate.py                      # Evaluate trained checkpoints
-+-- scripts/summarize_results.py     # Aggregate existing eval_metrics.json files
+<!-- +-- scripts/summarize_results.py     # Aggregate existing eval_metrics.json files -->
 +-- seg_training/                    # Model, data pipeline, training loop, run logging
-+-- tests/                           # Unit tests for split and result utilities
+<!-- +-- tests/                           # Unit tests for split and result utilities -->
 +-- results/                         # Generated result summaries
 ```
 
@@ -98,10 +96,10 @@ Train one experiment:
 
 ```bash
 python train.py \
-  --out-dir outputs\gen_seed_42\atlas+uncond3 \
+  --out-dir outputs \
   --split-file atlas_train_val_0.8_42.csv \
   --gen-root <gen-root> \
-  --gen-ratio 0.3 \
+  --gen-ratio <gen-ratio> \
   --gen-seed 42 \
   --cache-workers 8 \
   --loader-workers 8 \
@@ -114,18 +112,17 @@ Evaluate a checkpoint:
 
 ```bash
 python evaluate.py \
-  --checkpoint "outputs\gen_seed_42\atlas+uncond3/unet3d_best_*.pt" \
+  --checkpoint "outputs/unet3d_best_*.pt" \
   --split-file atlas_train_val_0.8_42.csv \
-  --path-prefix <prefix for relative paths in the split CSV>
 ```
 
-Summarize existing results:
+<!-- Summarize existing results:
 
 ```bash
 python scripts/summarize_results.py \
   --outputs-dir outputs \
   --out-dir results
-```
+``` -->
 
 ## Metrics
 
@@ -136,16 +133,16 @@ Evaluation reports per-run and per-case:
 - Precision
 - Recall
 
-The summary script aggregates `outputs/**/eval_metrics.json` by synthetic ratio and reports mean Dice, standard deviation, delta from the real-only baseline, and best Dice per ratio.
+<!-- The summary script aggregates `outputs/**/eval_metrics.json` by synthetic ratio and reports mean Dice, standard deviation, delta from the real-only baseline, and best Dice per ratio. -->
 
-## Tests
+<!-- ## Tests
 
 ```bash
 python -m unittest tests.test_split_csv tests.test_summarize_results
-```
+``` -->
 
-## Limitations and Next Steps
+<!-- ## Limitations and Next Steps
 
 - Current results are based on existing ATLAS experiments.
 - The observed gains are modest, so future work should evaluate low-label regimes, lesion-size stratification, external validation, and synthetic sample quality filtering.
-- Additional statistical testing would be needed before making strong claims about significance.
+- Additional statistical testing would be needed before making strong claims about significance. -->
