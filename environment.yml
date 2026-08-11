@@ -1,0 +1,22 @@
+name: seg
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pytorch
+  - pytorch-cuda=12.1
+  - numpy
+  - scipy
+  - matplotlib
+  - pytest
+  - pip
+  - pip:
+      - monai
+      - nibabel
+      - tqdm
+      - wandb

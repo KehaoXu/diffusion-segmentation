@@ -47,12 +47,9 @@ Synthetic data generation is handled outside this repository with [USB](https://
 ## Environment
 
 ```bash
-conda create -n diffusion-seg python=3.10
-conda activate diffusion-seg
-pip install torch monai numpy scipy tqdm matplotlib wandb
+conda env create -f environment.yml
+conda activate seg
 ```
-
-<!-- `wandb` is only required when training with `--use-wandb`. -->
 
 ## Data Format
 
@@ -127,14 +124,6 @@ Evaluation reports per-run and per-case:
 - IoU
 - Precision
 - Recall
-
-<!-- The summary script aggregates `outputs/**/eval_metrics.json` by synthetic ratio and reports mean Dice, standard deviation, delta from the real-only baseline, and best Dice per ratio. -->
-
-<!-- ## Tests
-
-```bash
-python -m unittest tests.test_split_csv tests.test_summarize_results
-``` -->
 
 <!-- ## Limitations and Next Steps
 
