@@ -35,14 +35,10 @@ Detailed generated artifacts:
 ## Repository Layout
 
 ```text
-.
-+-- atlas_train_val_0.8_42.csv       # Compact train/validation split CSV
-<!-- +-- split_train_val.py               # Create fixed train/validation splits -->
++-- split_train_val.py               # Create fixed train/validation splits
 +-- train.py                         # Train the segmentation model
 +-- evaluate.py                      # Evaluate trained checkpoints
-<!-- +-- scripts/summarize_results.py     # Aggregate existing eval_metrics.json files -->
 +-- seg_training/                    # Model, data pipeline, training loop, run logging
-<!-- +-- tests/                           # Unit tests for split and result utilities -->
 +-- results/                         # Generated result summaries
 ```
 
@@ -56,7 +52,7 @@ conda activate diffusion-seg
 pip install torch monai numpy scipy tqdm matplotlib wandb
 ```
 
-`wandb` is only required when training with `--use-wandb`.
+<!-- `wandb` is only required when training with `--use-wandb`. -->
 
 ## Data Format
 
@@ -78,26 +74,25 @@ Synthetic data:
 +-- x0_<case_id>.nii.gz       # label
 ```
 
-## Reproduce the Workflow
+## Workflow
 
 Create a fixed split:
 
 ```bash
 python split_train_val.py \
   --real-root <real-root> \
-  --split-file atlas_train_val.csv \
   --split-seed 42 \
   --train-ratio 0.8
 ```
 
-The saved file is named automatically as `atlas_train_val_{train_ratio}_{split_seed}.csv`, for example `atlas_train_val_0.8_42.csv`.
+<!-- The saved file is named automatically as `atlas_train_val_{train_ratio}_{split_seed}.csv`, for example `atlas_train_val_0.8_42.csv`. -->
 
 Train one experiment:
 
 ```bash
 python train.py \
   --out-dir outputs \
-  --split-file atlas_train_val_0.8_42.csv \
+  --split-file <split-file> \
   --gen-root <gen-root> \
   --gen-ratio <gen-ratio> \
   --gen-seed 42 \
@@ -106,14 +101,14 @@ python train.py \
   --show-progress
 ```
 
-`--gen-ratio` is relative to the number of real training samples. For example, `0.3` adds 30 synthetic samples for every 100 real training samples.
+<!-- `--gen-ratio` is relative to the number of real training samples. For example, `0.3` adds 30 synthetic samples for every 100 real training samples. -->
 
 Evaluate a checkpoint:
 
 ```bash
 python evaluate.py \
   --checkpoint "outputs/unet3d_best_*.pt" \
-  --split-file atlas_train_val_0.8_42.csv \
+  --split-file <split-file> \
 ```
 
 <!-- Summarize existing results:
