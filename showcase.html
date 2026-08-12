@@ -67,7 +67,7 @@
     <section class="card">
       <h2>Experiment results</h2>
       <p>Performance was measured across synthetic-to-real ratios from 0.0 to 0.9. The results suggest a modest improvement, while also showing why the amount of synthetic data should be tuned rather than maximized blindly.</p>
-      <img class="result-chart" src="../results/ratio_vs_dice.svg" alt="Mean Dice versus synthetic-to-real ratio" />
+      <img class="result-chart" src="results/ratio_vs_dice.svg" alt="Mean Dice versus synthetic-to-real ratio" />
     </section>
 
     <section id="demo" class="card">
@@ -123,13 +123,13 @@
 
     const volumes = [
       {
-        url: "../example/sub-001.nii.gz",
+        url: "example/sub-001.nii.gz",
         name: "sub-001.nii.gz",
         colormap: "gray",
         opacity: 1,
       },
       {
-        url: "../example/sub-001_mask.nii.gz",
+        url: "example/sub-001_mask.nii.gz",
         name: "sub-001_mask.nii.gz",
         colormap: "red",
         opacity: Number(opacity.value),
