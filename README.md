@@ -78,7 +78,6 @@ Create a fixed split:
 ```bash
 python split_train_val.py \
   --real-root <real-root> \
-  --split-seed 42 \
   --train-ratio 0.8
 ```
 
@@ -92,10 +91,6 @@ python train.py \
   --split-file <split-file> \
   --gen-root <gen-root> \
   --gen-ratio <gen-ratio> \
-  --gen-seed 42 \
-  --cache-workers 8 \
-  --loader-workers 8 \
-  --show-progress
 ```
 
 <!-- `--gen-ratio` is relative to the number of real training samples. For example, `0.3` adds 30 synthetic samples for every 100 real training samples. -->
@@ -107,6 +102,48 @@ python evaluate.py \
   --checkpoint "outputs/unet3d_best_*.pt" \
   --split-file <split-file> \
 ```
+
+Predict a mask for one MRI volume:
+
+```bash
+python predict.py \
+  --input <input-mri.nii.gz> \
+  --output <predicted-mask.nii.gz> \
+  --checkpoint <checkpoint.pt> \
+```
+
+<!-- ## API and Docker deployment
+
+Run the API directly after installing the environment:
+
+```bash
+set MODEL_CHECKPOINT=outputs/gen_seed_40/atlas+uncond6/unet3d_best_88.pt
+set MODEL_DEVICE=cuda
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+Check the service:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Submit one MRI and save the returned mask:
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -F "image=@patient.nii.gz" \
+  -o patient_mask.nii.gz
+```
+
+Build and run with Docker. The checkpoint is mounted separately so experiment outputs are not copied into the image:
+
+```bash
+docker build -t mri-seg .
+docker run --gpus all -p 8000:8000 \
+  -v "$(pwd)/outputs/gen_seed_40/atlas+uncond6/unet3d_best_88.pt:/models/unet3d_best_88.pt:ro" \
+  mri-seg
+``` -->
 
 <!-- Summarize existing results:
 

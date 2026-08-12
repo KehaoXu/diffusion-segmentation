@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>3D MRI Lesion Segmentation Demo</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b1120; color: #f9fafb; font-family: Inter, Arial, sans-serif; }
+    main { width: min(1200px, calc(100% - 32px)); margin: 0 auto; padding-bottom: 64px; }
+    header { padding: 72px 0 42px; }
+    h1 { max-width: 850px; margin: 0 0 16px; font-size: clamp(2.2rem, 5vw, 4.5rem); line-height: 1.05; }
+    h2 { margin-top: 0; font-size: 1.55rem; }
+    p { color: #cbd5e1; line-height: 1.7; }
+    .eyebrow { color: #f87171; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    .lead { max-width: 760px; font-size: 1.15rem; }
+    .hero-links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
+    .button { display: inline-block; padding: 11px 16px; border-radius: 8px; background: #ef4444; color: white; text-decoration: none; font-weight: 700; }
+    .button.secondary { background: #253247; }
+    .card { padding: 20px; background: #1f2937; border-radius: 14px; margin-top: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .stat strong { display: block; margin-bottom: 6px; font-size: 1.8rem; color: #fca5a5; }
+    .stat span { color: #cbd5e1; }
+    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .step { padding: 16px; border: 1px solid #374151; border-radius: 10px; color: #dbeafe; }
+    .step b { display: block; color: #fca5a5; margin-bottom: 8px; }
+    .result-chart { width: 100%; max-height: 360px; object-fit: contain; background: #111827; border-radius: 10px; }
+    #viewer { display: block; width: 100%; height: min(75vh, 720px); min-height: 520px; background: #000; border-radius: 10px; }
+    .controls { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+    label { color: #cbd5e1; }
+    input { accent-color: #ef4444; }
+    #status { color: #fbbf24; }
+    code { color: #fca5a5; }
+    a { color: #93c5fd; }
+    footer { color: #94a3b8; font-size: .9rem; margin-top: 34px; }
+    @media (max-width: 760px) { .grid, .pipeline { grid-template-columns: 1fr; } header { padding-top: 42px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Research showcase</div>
+      <h1>Diffusion-Augmented 3D Brain Lesion Segmentation</h1>
+      <p class="lead">Can diffusion-generated synthetic MRI data improve lesion segmentation when real medical imaging data is limited?</p>
+      <div class="hero-links">
+        <a class="button" href="#demo">View the result</a>
+        <a class="button secondary" href="https://github.com/KehaoXu/diffusion-augmented-segmentation" target="_blank" rel="noreferrer">View source code</a>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2>What this project does</h2>
+      <p>This project studies whether synthetic MRI cases generated with a diffusion pipeline can be mixed with real ATLAS cases to train a stronger 3D lesion segmentation model. The segmentation model is a MONAI 3D U-Net that produces a binary lesion mask from a single MRI volume.</p>
+    </section>
+
+    <section class="card">
+      <h2>Method</h2>
+      <div class="pipeline">
+        <div class="step"><b>01 · Data</b>Real ATLAS MRI and lesion labels</div>
+        <div class="step"><b>02 · Augmentation</b>Diffusion-generated synthetic MRI cases</div>
+        <div class="step"><b>03 · Training</b>3D U-Net with sliding-window inference</div>
+        <div class="step"><b>04 · Evaluation</b>Dice, IoU, precision, and recall</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Experiment results</h2>
+      <p>Performance was measured across synthetic-to-real ratios from 0.0 to 0.9. The results suggest a modest improvement, while also showing why the amount of synthetic data should be tuned rather than maximized blindly.</p>
+      <img class="result-chart" src="../results/ratio_vs_dice.svg" alt="Mean Dice versus synthetic-to-real ratio" />
+    </section>
+
+    <section id="demo" class="card">
+      <h2>Interactive example</h2>
+      <p>Explore an example below. The MRI is shown in grayscale and the predicted lesion mask is overlaid in red. Drag the crosshair to inspect different locations.</p>
+
+    <section class="card">
+      <div class="controls">
+        <label>
+          Mask opacity
+          <input id="opacity" type="range" min="0" max="1" value="0.6" step="0.05" />
+        </label>
+        <label>
+          View
+          <select id="view">
+            <option value="multiplanar">Three views + 3D</option>
+            <option value="render">3D render</option>
+          </select>
+        </label>
+        <span id="status">Loading example...</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <canvas id="viewer"></canvas>
+    </section>
+
+    <!-- <p>
+      Data files:
+      <a href="../example/sub-001.nii.gz">MRI</a> ·
+      <a href="../example/sub-001_mask.nii.gz">mask</a>
+    </p> -->
+    </section>
+
+    <section class="card">
+      <h2>Limitations</h2>
+      <p>This is a research prototype, not a clinical diagnostic system. The displayed example is intended for visualization only. Results may depend on scanner, preprocessing, lesion size, and the distribution of the training data.</p>
+    </section>
+
+    <footer>Built for research communication · See the repository README for training and evaluation details.</footer>
+  </main>
+
+  <script type="module">
+    import { Niivue } from "https://unpkg.com/@niivue/niivue@0.47.0/dist/index.js";
+
+    const canvas = document.getElementById("viewer");
+    const opacity = document.getElementById("opacity");
+    const view = document.getElementById("view");
+    const status = document.getElementById("status");
+    const nv = new Niivue({ isColorbar: false, show3Dcrosshair: true });
+
+    nv.attachToCanvas(canvas);
+
+    const volumes = [
+      {
+        url: "../example/sub-001.nii.gz",
+        name: "sub-001.nii.gz",
+        colormap: "gray",
+        opacity: 1,
+      },
+      {
+        url: "../example/sub-001_mask.nii.gz",
+        name: "sub-001_mask.nii.gz",
+        colormap: "red",
+        opacity: Number(opacity.value),
+      },
+    ];
+
+    try {
+      await nv.loadVolumes(volumes);
+      nv.setSliceType(nv.sliceTypeMultiplanar);
+      nv.setMultiplanarLayout(2);
+      status.textContent = "Loaded";
+    } catch (error) {
+      status.textContent = "Failed to load example: " + error.message;
+      console.error(error);
+    }
+
+    opacity.addEventListener("input", () => {
+      if (nv.volumes[1]) {
+        nv.volumes[1].opacity = Number(opacity.value);
+        nv.updateGLVolume();
+      }
+    });
+
+    view.addEventListener("change", () => {
+      if (view.value === "render") {
+        nv.setSliceType(nv.sliceTypeRender);
+      } else {
+        nv.setSliceType(nv.sliceTypeMultiplanar);
+        nv.setMultiplanarLayout(2);
+      }
+    });
+  </script>
+</body>
+</html>

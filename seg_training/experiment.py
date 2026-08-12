@@ -1,5 +1,4 @@
 import csv
-import fcntl
 import json
 import os
 import socket
@@ -9,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+import portalocker
 
 from .config import TrainConfig
 
@@ -224,9 +225,9 @@ class ExperimentRecorder(object):
         fieldnames = REGISTRY_FIELDNAMES + [key for key in row.keys() if key not in REGISTRY_FIELDNAMES]
 
         with self.registry_path.open("a", newline="") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            portalocker.lock(f, portalocker.LOCK_EX)
             try:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
                 f.seek(0, os.SEEK_END)
                 if f.tell() == 0:
                     writer.writeheader()
@@ -234,4 +235,4 @@ class ExperimentRecorder(object):
                 f.flush()
                 os.fsync(f.fileno())
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                portalocker.unlock(f)
