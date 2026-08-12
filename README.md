@@ -1,6 +1,6 @@
 # Diffusion-Based Synthetic MRI Augmentation for 3D Brain Lesion Segmentation
 
-Evaluate how diffusion-generated synthetic MRI data affects downstream 3D lesion segmentation. The workflow builds fixed data splits, mixes real and synthetic samples, trains a 3D U-Net, and summarizes performance across synthetic-to-real ratios.
+The project evaluates how diffusion-generated synthetic MRI data affects downstream 3D lesion segmentation. The workflow builds fixed data splits, mixes real and synthetic samples, trains a 3D U-Net, and summarizes performance across synthetic-to-real ratios.
 
 ## Highlights
 
@@ -38,8 +38,11 @@ Detailed generated artifacts:
 +-- split_train_val.py               # Create fixed train/validation splits
 +-- train.py                         # Train the segmentation model
 +-- evaluate.py                      # Evaluate trained checkpoints
++-- predict.py                       # Predict a mask for one MRI volume
 +-- seg_training/                    # Model, data pipeline, training loop, run logging
-+-- results/                         # Generated result summaries
++-- environment.yml                  # Conda environment specification
++-- example/                         # Example MRI volume and predicted mask
++-- results/                         # Result summary
 ```
 
 Synthetic data generation is handled outside this repository with [USB](https://github.com/jhuldr/USB.git). This repository consumes generated samples through `--gen-root`.
@@ -90,7 +93,7 @@ python train.py \
   --out-dir outputs \
   --split-file <split-file> \
   --gen-root <gen-root> \
-  --gen-ratio <gen-ratio> \
+  --gen-ratio <gen-ratio>
 ```
 
 <!-- `--gen-ratio` is relative to the number of real training samples. For example, `0.3` adds 30 synthetic samples for every 100 real training samples. -->
@@ -100,7 +103,7 @@ Evaluate a checkpoint:
 ```bash
 python evaluate.py \
   --checkpoint "outputs/unet3d_best_*.pt" \
-  --split-file <split-file> \
+  --split-file <split-file>
 ```
 
 Predict a mask for one MRI volume:
@@ -109,7 +112,7 @@ Predict a mask for one MRI volume:
 python predict.py \
   --input <input-mri.nii.gz> \
   --output <predicted-mask.nii.gz> \
-  --checkpoint <checkpoint.pt> \
+  --checkpoint <checkpoint.pt>
 ```
 
 <!-- ## API and Docker deployment
